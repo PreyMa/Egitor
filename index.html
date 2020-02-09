@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="./style.css">
+    <script src="./main.js" charset="utf-8"></script>
+    <title>editor</title>
+
+    <style>
+      #main {
+        height: 500px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="main"></div>
+  </body>
+
+  <script type="text/javascript">
+    (function() {
+      const Editor= Egitor();
+      const e= new Editor( document.getElementById('main') );
+    })();
+  </script>
+</html>
