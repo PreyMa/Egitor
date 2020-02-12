@@ -493,6 +493,15 @@ function Egitor(){
     return s;
   }
 
+  Cursor.prototype.insertText= function( t ) {
+    if( this.selection ) {
+
+    }
+
+    // alte selection löschen -> zeilen objekte behalten
+    //
+  }
+
 
   function Line( pos= 0, content= null ) {
   	this.number= pos;
@@ -657,6 +666,10 @@ function Egitor(){
 
       // Just split the styling array (keep the first element)
       Array.prototype.push.apply(data.styling, this.styling.splice( idx, this.styling.length- idx) );
+    }
+
+    if( !this.styling.length ) {
+      this.addDefaultStyling();
     }
 
     return data;
@@ -1009,7 +1022,6 @@ function Egitor(){
       if( k || !(e.ctrlKey && (e.key === 'v' || e.key === 'c' || e.key === 'x')) ) {
         this.handler( k ? k : e, data );
       }
-      this.anim.type();
       this.element.value= '';
     }
   }
@@ -1134,6 +1146,7 @@ function Egitor(){
             break;
         }
       }
+      this.anim.type();
     });
 
 
@@ -1169,6 +1182,8 @@ function Egitor(){
     this.anchor.addEventListener('mouseover', () => { isMouseOver= true;  });
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
     document.addEventListener('click', (e) => { isMouseOver ? this.focus() : this.unfocus(); e.preventDefault(); });
+
+    this.selectionElement.addEventListener('scroll', () => {});
   }
 
   Editor.prototype.isFocused= function() {
@@ -1196,9 +1211,13 @@ function Egitor(){
 
       // If constructor has run allow setting the focus
       if( this._isConstruct ) {
-        this.input.setFocus( true );
         this.anim.setFocus( true );
       }
+    }
+
+    // Always set the input focus
+    if( this._isConstruct ) {
+      this.input.setFocus( true );
     }
   }
 
