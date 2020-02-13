@@ -34,9 +34,13 @@ function Egitor(){
     return v;
   }
 
-  function copyElementSize( from, to ) {
-    to.style.width=  ''+ from.style.clientWidth+ 'px;'
-    to.style.height= ''+ from.style.clientHeight+ 'px;'
+  function copyElementWidth( from, to, off= 0 ) {
+    to.style.width=  ''+ (off+ from.scrollWidth)+ 'px';
+  }
+
+  function copyElementScroll( from, to ) {
+    to.scrollTop= from.scrollTop;
+    to.scrollLeft= from.scrollLeft;
   }
 
   const isLetter= (function() {
@@ -409,14 +413,14 @@ function Egitor(){
         return l.destroy();
       }
 
-      // First or last line
-      l.removeTextSection( b, e );
-
       // First line
       if( !i ) {
         first= l;
         begin= b;
       }
+
+      // First or last line
+      l.removeTextSection( b, e );
     });
 
     // Remove line break
@@ -512,7 +516,7 @@ function Egitor(){
     // Actual text layer
     let text= document.createElement('DIV');
     text.classList.add('line');
-    text.innerHTML= '<div class="line-number"> '+ (pos+ 1)+ ' </div> <div class="line-text"></div>';
+    text.innerHTML= '<div class="line-number"> '+ (pos+ 1)+ ' </div> <div class="line-text"></div><div class="line-tail line-text"></div>';
 
   	this.textElement= text;
 
@@ -547,19 +551,13 @@ function Egitor(){
     const o= currentContext.cursorElement;
     const s= currentContext.selectionElement;
 
-    if( pos === lines.length -1 ) {
-    	t.appendChild( this.textElement );
-      o.appendChild( this.cursorOverlayElement );
-      s.appendChild( this.selectionOverlayElement );
-    } else {
-      t.insertBefore( this.textElement, t.children[ pos ]);
-      o.insertBefore( this.cursorOverlayElement, o.children[ pos ]);
-      s.insertBefore( this.selectionOverlayElement, s.children[pos]);
+    t.insertBefore( this.textElement, t.children[ pos ]);
+    o.insertBefore( this.cursorOverlayElement, o.children[ pos ]);
+    s.insertBefore( this.selectionOverlayElement, s.children[pos]);
 
-      // Update all following lines
-      for( let i= pos; i< lines.length; i++ ) {
-      	lines[i].setNumber( i );
-      }
+    // Update all following lines
+    for( let i= pos; i< lines.length; i++ ) {
+      lines[i].setNumber( i );
     }
   }
 
@@ -777,6 +775,9 @@ function Egitor(){
     }
 
     if( pos >= end ) {
+      if( pos === end ) {
+        return;
+      }
       throw Error('Invalid arguments');
     }
 
@@ -1147,6 +1148,7 @@ function Egitor(){
         }
       }
       this.anim.type();
+      this._updateWidths();
     });
 
 
@@ -1162,17 +1164,17 @@ function Egitor(){
 
     anchor.innerHTML= `<div class= "editor">
       <div class="background container">
-        <div class="sidebar"></div>
+        <div class="sidebar"><div class="filler"></div></div>
       </div>
-      <div class="text-field container" ></div>
-      <div class="selection-overlay container"></div>
-      <div class= "cursor-overlay container"></div>
+      <div class="text-field container" ><div class="filler"></div></div>
+      <div class="selection-overlay container"><div class="filler"></div></div>
+      <div class= "cursor-overlay container"><div class="cursor-content"><div class="filler"></div></div></div>
       <div class="input-container"></div>
     </div>`;
 
     this.backElement=      anchor.getElementsByClassName('background')[0];
     this.textElement=      anchor.getElementsByClassName('text-field')[0];
-    this.cursorElement=    anchor.getElementsByClassName('cursor-overlay')[0];
+    this.cursorElement=    anchor.getElementsByClassName('cursor-overlay')[0].firstElementChild;
     this.selectionElement= anchor.getElementsByClassName('selection-overlay')[0];
     this.inputContainer=   anchor.getElementsByClassName('input-container')[0];
   }
@@ -1183,7 +1185,21 @@ function Egitor(){
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
     document.addEventListener('click', (e) => { isMouseOver ? this.focus() : this.unfocus(); e.preventDefault(); });
 
-    this.selectionElement.addEventListener('scroll', () => {});
+    // set scroll position for all stacked overlays
+    const ce= this.cursorElement.parentElement;
+    ce.addEventListener('scroll', (e) => {
+      //console.log(e);
+      copyElementScroll( ce, this.textElement );
+      copyElementScroll( ce, this.selectionElement );
+      copyElementScroll( ce, this.backElement );
+    });
+  }
+
+  Editor.prototype._updateWidths= function() {
+    const te= this.textElement;
+    copyElementWidth( te, this.cursorElement.lastElementChild );
+    copyElementWidth( te, this.selectionElement.lastElementChild );
+    copyElementWidth( te, this.backElement.lastElementChild.lastElementChild );
   }
 
   Editor.prototype.isFocused= function() {

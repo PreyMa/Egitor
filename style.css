@@ -16,6 +16,16 @@
   font-family: "Courier New", Courier, "Lucida Sans Typewriter", "Lucida Typewriter", monospace;
 }
 
+.filler {
+  padding: 0;
+  margin: 0;
+  height: 200px;
+}
+
+.cursor-content {
+  display: inline-block;
+}
+
 .text-field {
   z-index: 2;
 }
@@ -40,6 +50,10 @@
 .line-text {
   display: inline-block;
   white-space: pre;
+}
+
+.line-tail {
+  width: 20px;
 }
 
 .blue {
