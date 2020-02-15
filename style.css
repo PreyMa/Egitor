@@ -22,12 +22,16 @@
   height: 200px;
 }
 
-.cursor-content {
-  display: inline-block;
+.size-probe {
+  display: flex;
 }
 
-.text-field {
-  z-index: 2;
+.size-probe>div {
+  flex-grow: 1;
+}
+
+.cursor-content {
+  display: inline-block;
 }
 
 .line {
@@ -84,10 +88,6 @@
   -moz-user-select: none; /* Firefox */
   -ms-user-select: none; /* IE10+/Edge */
   user-select: none; /* Standard */
-}
-
-.background {
-  z-index: 0;
 }
 
 .sidebar {

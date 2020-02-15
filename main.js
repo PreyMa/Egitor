@@ -204,6 +204,8 @@ function Egitor(){
 
     this.selection= null;
 
+    this.onMove= null;
+
     this.newLine();
   }
 
@@ -229,6 +231,18 @@ function Egitor(){
 
   Cursor.prototype.show= function() {
     this.curLine.showCursor();
+  }
+
+  Cursor.prototype.setListener= function( nm, fn ) {
+    switch(nm) {
+      case 'move':
+        this.onMove= fn;
+        break;
+
+      default:
+        throw Error('Unknown listener type!');
+    }
+    return this;
   }
 
   Cursor.prototype.getNextChar= function() {
@@ -319,6 +333,11 @@ function Egitor(){
         this.selection.destroy();
         this.selection= null;
       }
+    }
+
+    // Call event listner if one is currently set
+    if( this.onMove ) {
+      this.onMove();
     }
   }
 
@@ -1064,6 +1083,7 @@ function Egitor(){
 
     const cursor= new Cursor();
     this.cursor= cursor;
+    cursor.setListener('move', () => { this._updateScrollPosition(); });
 
     this.anim= new CursorAnimator( cursor );
 
@@ -1147,8 +1167,8 @@ function Egitor(){
             break;
         }
       }
-      this.anim.type();
-      this._updateWidths();
+      this.anim.type();     // Pause the cursor blinking animation while typing
+      this._updateWidths(); // Make all overlays as big as the text layer
     });
 
 
@@ -1163,15 +1183,17 @@ function Egitor(){
     deleteAllChildren( anchor );
 
     anchor.innerHTML= `<div class= "editor">
+      <div class="size-probe container"><div></div></div>
       <div class="background container">
         <div class="sidebar"><div class="filler"></div></div>
       </div>
-      <div class="text-field container" ><div class="filler"></div></div>
       <div class="selection-overlay container"><div class="filler"></div></div>
+      <div class="text-field container" ><div class="filler"></div></div>
       <div class= "cursor-overlay container"><div class="cursor-content"><div class="filler"></div></div></div>
       <div class="input-container"></div>
     </div>`;
 
+    this.sizeElement=      anchor.getElementsByClassName('size-probe')[0].firstElementChild;
     this.backElement=      anchor.getElementsByClassName('background')[0];
     this.textElement=      anchor.getElementsByClassName('text-field')[0];
     this.cursorElement=    anchor.getElementsByClassName('cursor-overlay')[0].firstElementChild;
@@ -1180,6 +1202,7 @@ function Egitor(){
   }
 
   Editor.prototype._setupEvents= function() {
+    // Register clicks and keep track if they are inside of the editor to allow for unfocusing
     let isMouseOver= false;
     this.anchor.addEventListener('mouseover', () => { isMouseOver= true;  });
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
@@ -1188,7 +1211,6 @@ function Egitor(){
     // set scroll position for all stacked overlays
     const ce= this.cursorElement.parentElement;
     ce.addEventListener('scroll', (e) => {
-      //console.log(e);
       copyElementScroll( ce, this.textElement );
       copyElementScroll( ce, this.selectionElement );
       copyElementScroll( ce, this.backElement );
@@ -1200,6 +1222,33 @@ function Egitor(){
     copyElementWidth( te, this.cursorElement.lastElementChild );
     copyElementWidth( te, this.selectionElement.lastElementChild );
     copyElementWidth( te, this.backElement.lastElementChild.lastElementChild );
+  }
+
+  Editor.prototype._updateScrollPosition= function() {
+    // Get bounding boxes for current overlay line and editor root element
+    const ovLine= this.cursor.curLine.cursorOverlayElement.children[1];
+    const lineRect= ovLine.getBoundingClientRect();
+    const rootRect= this.sizeElement.getBoundingClientRect();
+
+    const ce= this.cursorElement.parentElement;
+
+    // Cursor leaves bottom of the screen
+    if( lineRect.bottom > rootRect.bottom ) {
+      ce.scrollTop+= lineRect.bottom- rootRect.bottom;
+
+    // Cursor leaves top of the screen
+    } else if( lineRect.top < rootRect.top ) {
+      ce.scrollTop-= rootRect.top- lineRect.top;
+    }
+
+    // Cursor leaves right of the screen
+    if( lineRect.right > rootRect.right ) {
+      ce.scrollLeft+= lineRect.right- rootRect.right;
+
+    // Cursor leaves left of the screen
+    }else if( lineRect.right < rootRect.left ) {
+      ce.scrollLeft-= rootRect.left- lineRect.right;
+    }
   }
 
   Editor.prototype.isFocused= function() {
