@@ -5,7 +5,8 @@ function Egitor(){
     styleElement.type = 'text/css';
     document.getElementsByTagName('head')[0].appendChild( styleElement );
 
-    return function(name,rules) {
+    return function( name, rules ) {
+      name= '.'+ name;
       if( !(styleElement.sheet||{}).insertRule ) {
         (styleElement.styleSheet || styleElement.sheet).addRule( name, rules );
 
@@ -70,7 +71,7 @@ function Egitor(){
     this._id= (Styling.staticCounter++);
 
     color= color || 'black';
-    let css= 'color: '+ color+ ';';
+    let css= 'display: inherit; color: '+ color+ ';';
 
     if( bold ) {
       css+= 'font-weight: bold;';
@@ -81,7 +82,7 @@ function Egitor(){
     if( underline ) {
       css+= 'text-decoration: underline';
     }
-    createCSSClass( 'editor-class-'+name, css )
+    createCSSClass( 'editor-class-'+name, css );
   }
 
   Styling.staticCounter= 0;
@@ -133,6 +134,14 @@ function Egitor(){
     return { topLine, topChar, bottomLine, bottomChar };
   }
 
+  Selection.prototype.lineSpan= function() {
+    if( !this.endLine ) {
+      return 0;
+    }
+
+    return Math.abs( this.beginLine.number- this.endLine.number )+ 1;
+  }
+
   Selection.prototype.set= function( c ) {
     // Check if the selection changed line and the selection shrunk
     if( this.endLine && (this.endLine !== c.curLine) ) {
@@ -166,22 +175,52 @@ function Egitor(){
     }
   };
 
+  Selection.StopLoop= false;  // Break/Short circuit from the forEach loop
+  Selection.NoIncrement= 1;   // Stay at the current index
+
   Selection.prototype.forEach= function( fn ) {
     let n= this.normalize();
     if( n.topLine === n.bottomLine ) {
-      fn(n.topLine, n.topChar, n.bottomChar, 0);
+      fn(n.topLine, n.topChar, n.bottomChar, 0, true);
       return 1;
     }
 
-    fn( n.topLine, n.topChar, n.topLine.text.length, 0 );
+    let i= 1;
+    let end= n.bottomLine.number- n.topLine.number;
 
-    let c= 1;
-    for( let i= n.bottomLine.number- n.topLine.number- 1; i > 0; i--) {
-      let l= currentContext.lines[n.topLine.number+1];
-      fn( l, -1, l.text.length, c++ );
+    let r= fn( n.topLine, n.topChar, n.topLine.text.length, 0, false );
+    if( r === Selection.StopLoop ) {
+      return 1;
+      // Instead of moving forward stay at the same index and reduce the number
+      // of remaining iterations instead. Useful if the current line got deleted
+      // and the neighbouring line is now at the current index
+    } else if( r === Selection.NoIncrement ) {
+      i--;
+      end--;
     }
 
-    fn( n.bottomLine, 0, n.bottomChar, c );
+    let c= 1; // Independet iteration counter
+    for( ; i < end; i++ ) {
+      let num= n.topLine.number+i;
+      let l= currentContext.lines[num];
+
+      // Make sure the line knows its current position
+      // If lines are deleted during looping the number might be not correct anymore
+      l.setNumber( num, false ); // Doesn't update the html
+      r= fn( l, -1, l.text.length, i, false );
+
+      // Process callback function return value
+      if( r === Selection.StopLoop ) {
+        return c+1;
+      } else if( r === Selection.NoIncrement ) {
+        i--;
+        end--;
+      }
+      c++;
+    }
+
+    n.bottomLine.setNumber( n.topLine.number+ i );
+    fn( n.bottomLine, 0, n.bottomChar, c, true );
     return c+1;
   }
 
@@ -196,6 +235,25 @@ function Egitor(){
       lines[i].setSelection( -1 );
     }
   }
+
+  function LineData( t, s, e ) {
+      this.text= t || '';
+      this.styling= s || [];
+      this.elements= e || [];
+  }
+
+  LineData.prototype.addStyle= function(s) {
+    if( Array.isArray(s) ) {
+      Array.prototype.push.apply( this.styling, s );
+      return;
+    }
+    this.styling.push(s);
+  }
+
+  LineData.prototype.addElement= function(e) {
+    this.elements.push(e);
+  }
+
 
   function Cursor() {
   	this.curLine= null;
@@ -284,10 +342,14 @@ function Egitor(){
     }
 
   	this.curLine.writeCharacter( this.curChar, c );
-    this.move( this.curLine.number, this.curChar+ 1 );
+    this.move( this.curLine.number, this.curChar+ c.length );
   }
 
   Cursor.prototype.newLine= function() {
+    if( this.selection ) {
+      this.removeSelection();
+    }
+
   	let num= this.curLine ? this.curLine.number+ 1 : 0;
 
     // Move the text infront of the cursor to the new line
@@ -310,9 +372,10 @@ function Egitor(){
     }
 
     // Move the cursor to the next/previous line
-  	if( line !== this.curLine.number ) {
+    const n= currentContext.lines[line];
+  	if( this.curLine !== n ) {
     	this.hide();
-    	this.curLine= currentContext.lines[line];
+    	this.curLine= n;
     }
 
     // Set the cursor in the line
@@ -389,7 +452,8 @@ function Egitor(){
 
   Cursor.prototype.moveBegin= function( select ) {
     if( this.curChar ) {
-      this.move( this.curLine.number, 0, select );
+      // Move to first char in line that is not whitespace
+      this.move( this.curLine.number, this.curLine.firstNonWSChar(), select );
     } else {
       this.shadowPosition= this.curChar;
     }
@@ -429,7 +493,8 @@ function Egitor(){
     let num= this.selection.forEach( (l, b, e, i) => {
       // Neither the first or last line
       if( b< 0 ) {
-        return l.destroy();
+        l.destroy( false );
+        return Selection.NoIncrement;
       }
 
       // First line
@@ -450,6 +515,7 @@ function Egitor(){
     this.selection.destroy();
     this.selection= null;
     this.move( first.number, begin );
+    this.curLine.updateLineNumbers();
   }
 
   Cursor.prototype.removeWord= function( infront ) {
@@ -477,8 +543,10 @@ function Egitor(){
 
   Cursor.prototype.selectionToString= function() {
     let t= '';
-    this.selection.forEach( (l, b, e) => {
-      t += l.getString( b, e );
+    this.selection.forEach( (l, b, e, i) => {
+      // Don't add a NL if its the last line
+      // -> neither the first line (!i) nor an line inbetween (b>=0)
+      t += l.getString( b, e, ((b >= 0) && !i) );
     });
 
     return t;
@@ -517,16 +585,85 @@ function Egitor(){
   }
 
   Cursor.prototype.insertText= function( t ) {
-    if( this.selection ) {
+    const lines= t.replace('\r', '').split('\n');
+    const lastLine= lines[lines.length-1];
 
+    let line= null;
+
+    // One line selections are removed imediately and get treated as insertions
+    // without a selection at all
+    if( this.selection && (this.selection.lineSpan() === 1) ) {
+      this.removeSelection();
     }
 
-    // alte selection löschen -> zeilen objekte behalten
-    //
+    // Multiline selection
+    if( this.selection ) {
+
+      this.selection.forEach((l, b, e, i) => {
+        // Neither first or last line
+        if( b < 0 ) {
+          // Replace the line data
+          if( i < lines.length-1 ) {
+            l.reset( lines[i] );
+            return;
+          }
+
+          // Remove any remaining lines of the selection
+          l.destroy( false ); // Don't update line numbers yet
+          return Selection.NoIncrement;
+        }
+
+        // First line of the selection
+        if( !i ) {
+          l.removeTextSection( b, e );
+          l.append( lines[i] );
+          return;
+        }
+
+        // Last line of the selection
+        l.removeTextSection( b, e );
+        l.writeCharacter( 0, lastLine );
+        line= l;
+      });
+
+      // Insert any lines that didn't fit in the selection
+      for( let i= this.selection.lineSpan(); i< lines.length-1; i++ ) {
+        new Line( this.curLine.number+ i, lines[i], false );
+      }
+
+      this.selection.destroy();
+      this.selection= null;
+
+    } else {
+      // Just insert at current position
+      if( lines.length === 1 ) {
+        this.writeCharacter( lines[0] );
+        return;
+      }
+
+      // Split the line
+      let data= this.curLine.split( this.curChar );
+      this.curLine.writeCharacter( this.curChar, lines[0] );
+
+      // Create new lines and populate them
+      for( let i= 1; i< lines.length-1; i++ ) {
+        line= new Line( this.curLine.number+ i, lines[i], false );
+      }
+
+      // Create last line and fill it with the splitted off section
+      line= new Line( this.curLine.number+ lines.length- 1, data, false );
+      line.writeCharacter( 0, lastLine );
+    }
+
+    // Update all line numbers only once at the end
+    this.curLine.updateLineNumbers();
+
+    // Set new cursor position
+    this.move( line.number, lastLine.length );
   }
 
 
-  function Line( pos= 0, content= null ) {
+  function Line( pos= 0, content= null, updateLines= true ) {
   	this.number= pos;
     this.text= '';
     this.styling= [];
@@ -565,7 +702,7 @@ function Egitor(){
       this.addDefaultStyling();
     }
 
-    // Attach or insert line elements in their respective layers
+    // Attach line elements in their respective layers
     const t= currentContext.textElement;
     const o= currentContext.cursorElement;
     const s= currentContext.selectionElement;
@@ -575,13 +712,20 @@ function Egitor(){
     s.insertBefore( this.selectionOverlayElement, s.children[pos]);
 
     // Update all following lines
-    for( let i= pos; i< lines.length; i++ ) {
+    if( updateLines ) {
+      this.updateLineNumbers();
+    }
+  }
+
+  Line.prototype.updateLineNumbers= function() {
+    const lines= currentContext.lines;
+    for( let i= this.number; i< lines.length; i++ ) {
       lines[i].setNumber( i );
     }
   }
 
-  Line.prototype.reset= function( defstyling= true ) {
-    this.text= '';
+  Line.prototype.reset= function( txt= null ) {
+    this.text= (txt !== null) ? txt : '';
     this.addDefaultStyling();
   }
 
@@ -622,17 +766,19 @@ function Egitor(){
     return this.styling.length-1;
   }
 
-  Line.prototype.setNumber= function( n ) {
+  Line.prototype.setNumber= function( n, upd= true ) {
   	this.number= n;
-    this.textElement.children[0].innerHTML= (n+1);
+    if( upd ) {
+      this.textElement.children[0].innerHTML= (n+1);
+    }
   }
 
   Line.prototype.getData= function() {
-    return {
-      text: this.text,
-      styling: this.styling,
-      elements: Array.from( this.textElement.children[1].children )
-    };
+    return new LineData(
+      this.text,
+      this.styling,
+      Array.from( this.textElement.children[1].children )
+    );
   }
 
   Line.prototype.split= function( pos ) {
@@ -642,7 +788,7 @@ function Egitor(){
     }
 
     // Split the text string
-    let data= { text: '', styling: [], elements: [] };
+    let data= new LineData();
     let text= this.text;
     this.text= text.substring( 0, pos );
     data.text= text.substring( pos, text.length );
@@ -655,12 +801,12 @@ function Egitor(){
     // -> Split the section into two
     if( s.start !== pos ) {
       // Copy the split styling object
-      data.styling.push( Object.assign( {}, s ) );
+      data.addStyle( Object.assign( {}, s ) );
 
       // Duplicate the splitted section and split its inner html
       let o= pos- s.start;
       let inner= container.children[idx].innerHTML;
-      data.elements.push( s.type.createElement() );
+      data.addElement( s.type.createElement() );
       data.elements[0].innerHTML=        inner.substring( o );
       container.children[idx].innerHTML= inner.substring( 0, o );
 
@@ -675,14 +821,15 @@ function Egitor(){
       // Steal the html elements from the text container
       let node= container.children[idx];
       while( node ) {
-        data.elements.push( node );
+        data.addElement( node );
         let next= node.nextSibling;
         container.removeChild( node );
         node= next;
       }
 
       // Just split the styling array (keep the first element)
-      Array.prototype.push.apply(data.styling, this.styling.splice( idx, this.styling.length- idx) );
+      data.addStyle( this.styling.splice( idx, this.styling.length- idx) );
+      //Array.prototype.push.apply(data.styling, this.styling.splice( idx, this.styling.length- idx) );
     }
 
     if( !this.styling.length ) {
@@ -729,18 +876,26 @@ function Egitor(){
   }
 
   Line.prototype.append= function( data ) {
+    // Data may also be a simple string
+    if( typeof data === 'string' ) {
+      if( !this.styling.length ) {
+        this.addDefaultStyling();
+      }
+      this.writeCharacter( this.text.length, data );
+      return;
+    }
+
     // Add the elements
-    const self= this;
-    data.elements.forEach( function(e) {
-      self.textElement.children[1].appendChild( e );
+    data.elements.forEach( (e) => {
+      this.textElement.children[1].appendChild( e );
     });
 
     // Add the styling and offset the start and end
-    const shift= self.text.length- data.styling[0].start;
-    data.styling.forEach( function(s) {
+    const shift= this.text.length- data.styling[0].start;
+    data.styling.forEach( (s) => {
       s.start+= shift;
       s.end  += shift;
-      self.styling.push(s);
+      this.styling.push(s);
     });
 
     this.text+= data.text;
@@ -848,7 +1003,11 @@ function Egitor(){
       }
     }
 
-    this.updateSectionPositions( idx, -offset );
+    // If all sections are removed from a line, a default styling is
+    // added instead which should not be updated
+    if( this.styling[0].start !== 0 ) {
+      this.updateSectionPositions( idx, -offset );
+    }
     this.mergeElements();
   }
 
@@ -890,15 +1049,15 @@ function Egitor(){
     return -1;
   }
 
-  Line.prototype.getString= function( b, e ) {
+  Line.prototype.getString= function( b, e, nl= true ) {
     b= (typeof b === 'undefined') ? 0 : b;
     e= (typeof e === 'undefined') ? this.text.length : e;
 
     // Get substring of text data, and add a NL if needed
-    return this.text.substring(b, e) + ((e >= this.text.length) && this.isLastLine() ? '' : '\n');
+    return this.text.substring(b, e) + ((e >= this.text.length) && !this.isLastLine() && nl ? '\n' : '');
   }
 
-  Line.prototype.destroy= function() {
+  Line.prototype.destroy= function( upd= true ) {
     const t= currentContext.textElement;
     const o= currentContext.cursorElement;
     const s= currentContext.selectionElement;
@@ -912,8 +1071,8 @@ function Egitor(){
     lines.splice( pos, 1 );
 
     // Update all following lines
-    for( let i= pos; i< lines.length; i++ ) {
-      lines[i].setNumber( i );
+    if( upd ) {
+      this.updateLineNumbers();
     }
   }
 
@@ -939,7 +1098,7 @@ function Egitor(){
   }
 
   Line.prototype.addDefaultStyling= function() {
-    this.addStyling( [{start: 0, end: 0, type: defStyles[0]}] );
+    this.addStyling( [{start: 0, end: this.text.length, type: defStyles[0]}] );
   }
 
   Line.prototype.addStyling= function( a ) {
@@ -952,13 +1111,22 @@ function Egitor(){
     deleteAllChildren( container );
 
     // Iterate over styling and create elements in the text container
-    const self= this;
     this.styling= a;
-    this.styling.forEach( function(s) {
+    this.styling.forEach( (s) => {
       const section= s.type.createElement();
-      section.innerHTML= self.text.substring( s.start, s.end );
+      section.innerHTML= this.text.substring( s.start, s.end );
       container.appendChild( section );
     });
+  }
+
+  Line.prototype.firstNonWSChar= function() {
+    // Get first char that is not whitespace
+    for( let i= 0; i!== this.text.length; i++ ) {
+      if( !isWhitespace( this.text.charAt(i) ) ) {
+        return i;
+      }
+    }
+    return 0;
   }
 
   function CursorAnimator( c ) {
@@ -1071,9 +1239,12 @@ function Egitor(){
   const _End= 35;
   const _Pos1= 36;
   const _Backspace= 8;
+  const _Tabulator= 9;
   const _Delete= 46;
 
   function Editor( anchor ) {
+    this.tabLength= 2;
+
     this.focus();
 
     this._createDOM( anchor );
@@ -1111,18 +1282,16 @@ function Egitor(){
           switch( e.key ) {
             case 'v':
             case 'V':
-              console.log('Paste: ', v );
+              cursor.insertText( v.replace('\t', this._getTabulator()) );
               break;
 
             case 'c':
             case 'C':
-              console.log('Copy');
               input.toClipboard( cursor.copyCurrent() );
               break;
 
             case 'x':
             case 'X':
-              console.log('Cut');
               input.toClipboard( cursor.cutCurrent() );
               break;
           }
@@ -1165,6 +1334,10 @@ function Egitor(){
           case _Delete:
             cursor.removeCharacter( true );
             break;
+
+          case _Tabulator:
+            cursor.writeCharacter( this._getTabulator() );
+            e.preventDefault(); // Prevent unfocus via tab key
         }
       }
       this.anim.type();     // Pause the cursor blinking animation while typing
@@ -1208,12 +1381,20 @@ function Egitor(){
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
     document.addEventListener('click', (e) => { isMouseOver ? this.focus() : this.unfocus(); e.preventDefault(); });
 
-    // set scroll position for all stacked overlays
+    // Set scroll position for all stacked overlays
+    // Only run every frame and ignore any other incoming events
+    let doScroll= true;
     const ce= this.cursorElement.parentElement;
-    ce.addEventListener('scroll', (e) => {
-      copyElementScroll( ce, this.textElement );
-      copyElementScroll( ce, this.selectionElement );
-      copyElementScroll( ce, this.backElement );
+    ce.addEventListener('scroll', () => {
+      if( doScroll ) {
+        doScroll= false;
+        window.requestAnimationFrame(() => {
+          copyElementScroll( ce, this.textElement );
+          copyElementScroll( ce, this.selectionElement );
+          copyElementScroll( ce, this.backElement );
+          doScroll= true;
+        });
+      }
     });
   }
 
@@ -1284,6 +1465,10 @@ function Egitor(){
     if( this._isConstruct ) {
       this.input.setFocus( true );
     }
+  }
+
+  Editor.prototype._getTabulator= function() {
+    return ''.padStart( this.tabLength );
   }
 
   return Editor;
