@@ -585,7 +585,7 @@ function Egitor(){
   }
 
   Cursor.prototype.insertText= function( t ) {
-    const lines= t.replace('\r', '').split('\n');
+    const lines= t.replace(/\r/g, '').split('\n');
     const lastLine= lines[lines.length-1];
 
     let line= null;
@@ -829,7 +829,6 @@ function Egitor(){
 
       // Just split the styling array (keep the first element)
       data.addStyle( this.styling.splice( idx, this.styling.length- idx) );
-      //Array.prototype.push.apply(data.styling, this.styling.splice( idx, this.styling.length- idx) );
     }
 
     if( !this.styling.length ) {
