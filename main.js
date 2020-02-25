@@ -142,7 +142,7 @@ function Egitor(){
     return Math.abs( this.beginLine.number- this.endLine.number )+ 1;
   }
 
-  Selection.prototype.set= function( c ) {
+  Selection.prototype.set= function( c, show= true ) {
     // Check if the selection changed line and the selection shrunk
     if( this.endLine && (this.endLine !== c.curLine) ) {
       // Cursor moved line down and the selection is from top to bottom
@@ -158,20 +158,14 @@ function Egitor(){
     this.endLine= c.curLine;
     this.endChar= c.curChar;
 
-    let n= this.normalize();
-
-    // Is selection only in a single line
-    if( n.topLine === n.bottomLine ) {
-      n.topLine.setSelection( n.topChar, n.bottomChar );
-    } else {
-      // Update selection from top to bottom
-      n.topLine.selectLine( n.topChar );
-
-      for( let i= n.topLine.number+1; i< n.bottomLine.number; i++ ) {
-        currentContext.lines[i].selectLine();
-      }
-
-      n.bottomLine.setSelection( 0, n.bottomChar );
+    if( show ) {
+      this.forEach((l, b, e) => {
+        if( b < 0 ) {
+          l.selectLine();
+        } else {
+          l.setSelection( b, e );
+        }
+      });
     }
   };
 
@@ -487,10 +481,10 @@ function Egitor(){
     }
   }
 
-  Cursor.prototype.removeSelection= function() {
+  Cursor.prototype._removeSelection= function( selection ) {
     // Iterate over all selected lines
     let first= null, begin;
-    let num= this.selection.forEach( (l, b, e, i) => {
+    let num= selection.forEach( (l, b, e, i) => {
       // Neither the first or last line
       if( b< 0 ) {
         l.destroy( false );
@@ -512,10 +506,20 @@ function Egitor(){
       first.removeCharacter( first.text.length );
     }
 
-    this.selection.destroy();
-    this.selection= null;
+    selection.destroy();
     this.move( first.number, begin );
     this.curLine.updateLineNumbers();
+  }
+
+  Cursor.prototype.removeSelection= function( selection= null ) {
+    // Remove a provided selection
+    if( selection ) {
+      return this._removeSelection( selection );
+    }
+
+    // Remove the cursors current selection
+    this._removeSelection( this.selection );
+    this.selection= null;
   }
 
   Cursor.prototype.removeWord= function( infront ) {
@@ -523,7 +527,15 @@ function Egitor(){
       return this.removeSelection();
     }
 
-    //....
+    let s= new Selection( this );
+    if( infront ) {
+      this.moveNextWord();
+    } else {
+      this.movePreviousWord();
+    }
+
+    s.set( this, false ); // Set selection, but hide it
+    this.removeSelection( s );
   }
 
   Cursor.prototype.removeCharacter= function( infront ) {
@@ -1327,11 +1339,11 @@ function Egitor(){
             break;
 
           case _Backspace:
-            cursor.removeCharacter( false );
+            e.ctrlKey ? cursor.removeWord( false ) : cursor.removeCharacter( false );
             break;
 
           case _Delete:
-            cursor.removeCharacter( true );
+            e.ctrlKey ? cursor.removeWord( true ) : cursor.removeCharacter( true );
             break;
 
           case _Tabulator:
