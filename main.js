@@ -124,6 +124,24 @@ function Egitor(){
     new Styling( 'string', 'green' )
   ];
 
+
+  function StyleEntry( s, e, t= null ) {
+    this.start= s;
+    this.end= e;
+    this.type= t ? t : defStyles[0];
+  }
+
+  StyleEntry.prototype.copy= function() {
+    return new StyleEntry( this.start, this.end, this.type );
+  }
+
+  StyleEntry.prototype.createSection= function( text ) {
+    const section= this.type.createElement();
+    section.innerHTML= text.substring( this.start, this.end );
+    return section;
+  }
+
+
   function Selection( c, p ) {
     // Check if position offset was provided
     let o= (typeof p === 'undefined') ? 0 : p;
@@ -195,6 +213,7 @@ function Egitor(){
 
   Selection.StopLoop= false;  // Break/Short circuit from the forEach loop
   Selection.NoIncrement= 1;   // Stay at the current index
+  Selection.DoubleIncrement= 2;
 
   Selection.prototype.forEach= function( fn ) {
     let n= this.normalize();
@@ -209,12 +228,20 @@ function Egitor(){
     let r= fn( n.topLine, n.topChar, n.topLine.text.length, 0, false );
     if( r === Selection.StopLoop ) {
       return 1;
+
       // Instead of moving forward stay at the same index and reduce the number
       // of remaining iterations instead. Useful if the current line got deleted
       // and the neighbouring line is now at the current index
     } else if( r === Selection.NoIncrement ) {
       i--;
       end--;
+
+      // Move two indexes forward at the same time and increase the number of
+      // remaining iterations. Useful if a line was inserted before the current line
+      // which needs to be jumped over
+    } else if( r === Selection.DoubleIncrement ) {
+      i++;
+      end++;
     }
 
     let c= 1; // Independet iteration counter
@@ -223,17 +250,23 @@ function Egitor(){
       let l= currentContext.lines[num];
 
       // Make sure the line knows its current position
-      // If lines are deleted during looping the number might be not correct anymore
+      // If lines are deleted during looping the number might not be correct anymore
       l.setNumber( num, false ); // Doesn't update the html
-      r= fn( l, -1, l.text.length, i, false );
+      r= fn( l, -1, l.text.length, c, false );
 
       // Process callback function return value
       if( r === Selection.StopLoop ) {
         return c+1;
+
       } else if( r === Selection.NoIncrement ) {
         i--;
         end--;
+
+      } else if( r === Selection.DoubleIncrement ) {
+        i++;
+        end++;
       }
+
       c++;
     }
 
@@ -746,6 +779,36 @@ function Egitor(){
     this.move( line.number, lastLine.length );
   }
 
+  Cursor.prototype.duplicateSelection= function() {
+    // Requires a selection to be present
+    if( !this.selection ) {
+      return;
+    }
+
+    let first= null;
+    this.selection.forEach((l, b, e, i) => {
+      first= i ? first : l; // Save first line
+
+      let d= l.copyData();
+      new Line( first.number+ i, d, false ); // Don't update numbers yet
+
+      // Jump over newly added line
+      return Selection.DoubleIncrement;
+    });
+    first.updateLineNumbers();
+  }
+
+  Cursor.prototype.duplicateLine= function() {
+    if( this.selection ) {
+      return this.duplicateSelection();
+    }
+
+    // Create a copy of the current line data
+    // and insert a new line above the current one
+    let d= this.curLine.copyData();
+    new Line( this.curLine.number, d );
+  }
+
 
   function Line( pos= 0, content= null, updateLines= true ) {
   	this.number= pos;
@@ -841,6 +904,7 @@ function Egitor(){
 
   Line.prototype.getStyling= function( p ) {
     // Find the correct index of styling object / section span element for a provided position
+    // TODO: Could be changed to use linear binary search
     for( let i= 0; i!= this.styling.length; i++ ) {
       let s= this.styling[i];
       if( (s.start <= p) && (s.end > p) ) {
@@ -865,6 +929,21 @@ function Egitor(){
     );
   }
 
+  Line.prototype.copyData= function() {
+    // Copy styling objects
+    let s= new Array( this.styling.length );
+    this.styling.forEach((x, i) => { s[i]= x.copy(); });
+
+    // Copy DOM elements
+    let c= this.textElement.children[1].children;
+    let e= Array( c.length )
+    for( let i= 0; i!= c.length; i++ ) {
+      e[i]= c[i].cloneNode(true);
+    }
+
+    return new LineData( this.text, s, e );
+  }
+
   Line.prototype.split= function( pos ) {
     // Return no split if position is at the end of the line
     if( pos === this.text.length ) {
@@ -885,7 +964,7 @@ function Egitor(){
     // -> Split the section into two
     if( s.start !== pos ) {
       // Copy the split styling object
-      data.addStyle( Object.assign( {}, s ) );
+      data.addStyle( s.copy() );
 
       // Duplicate the splitted section and split its inner html
       let o= pos- s.start;
@@ -929,7 +1008,7 @@ function Egitor(){
       const s= this.styling[i];
       const n= (i !== this.styling.length-1) ? this.styling[i+1] : null;
 
-      // Remove empty elements/stylings from the dom
+      // Remove empty elements/styling from the dom
       if( s.start === s.end ) {
         // If the whole line is empty keep one section instead of adding the dafault style afterwards again
         if( this.text.length ||  (this.styling.length !== 1)) {
@@ -1181,7 +1260,7 @@ function Egitor(){
   }
 
   Line.prototype.addDefaultStyling= function() {
-    this.addStyling( [{start: 0, end: this.text.length, type: defStyles[0]}] );
+    this.addStyling( [new StyleEntry(0, this.text.length)] );
   }
 
   Line.prototype.addStyling= function( a ) {
@@ -1196,9 +1275,7 @@ function Egitor(){
     // Iterate over styling and create elements in the text container
     this.styling= a;
     this.styling.forEach( (s) => {
-      const section= s.type.createElement();
-      section.innerHTML= this.text.substring( s.start, s.end );
-      container.appendChild( section );
+      container.appendChild( s.createSection( this.text ) );
     });
   }
 
@@ -1343,12 +1420,12 @@ function Egitor(){
 
     // TEST
     this.lines[0].text= "Das ist ein langer String.";
-    this.lines[0].addStyling( [{start: 0,  end: 4,  type: defStyles[0]},
-                               {start: 4,  end: 8,  type: defStyles[0]},
-                               {start: 8,  end: 12, type: defStyles[0]},
-                               {start: 12, end: 19, type: defStyles[0]},
-                               {start: 19, end: 26, type: defStyles[0]}
-                             ] );
+    this.lines[0].addStyling( [new StyleEntry( 0,  4),
+                               new StyleEntry( 4,  8),
+                               new StyleEntry( 8, 12),
+                               new StyleEntry(12, 19),
+                               new StyleEntry(19, 26)
+                              ] );
 
 
     const input= new InputAdapter( this.inputContainer );
@@ -1383,6 +1460,7 @@ function Egitor(){
               break;
 
             case 'D':
+              cursor.duplicateLine();
               break;
           }
         }
