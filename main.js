@@ -550,6 +550,14 @@ function Egitor(){
     }
   }
 
+  Cursor.prototype.moveLines= function( num, select ) {
+    // Move the cursor by a specified number of lines
+    // Negative offsets move the cursor up, positives down
+    const max= currentContext.lines.length-1;
+    num= clamp( this.curLine.number+ num, 0, max )
+    this.move( num, this.curChar, select );
+  }
+
   Cursor.prototype._removeSelection= function( selection ) {
     // Iterate over all selected lines
     let first= null, begin;
@@ -1423,6 +1431,8 @@ function Egitor(){
   const _Backspace= 8;
   const _Tabulator= 9;
   const _Delete= 46;
+  const _PageUp= 33;
+  const _PageDown= 34;
 
   function Editor( anchor ) {
     this.tabLength= 2;
@@ -1533,6 +1543,15 @@ function Egitor(){
           case _Tabulator:
             cursor.writeCharacter( this._getTabulator() );
             e.preventDefault(); // Prevent unfocus via tab key
+            break;
+
+          case _PageDown:
+            cursor.moveLines( Math.round( this._getHeightInLines() ), s );
+            break;
+
+          case _PageUp:
+            cursor.moveLines( -Math.round( this._getHeightInLines() ), s );
+            break;
         }
       }
       this.anim.type();     // Pause the cursor blinking animation while typing
@@ -1551,7 +1570,7 @@ function Egitor(){
     deleteAllChildren( anchor );
 
     anchor.innerHTML= `<div class= "editor">
-      <div class="size-probe container"><div></div></div>
+      <div class="size-probe container"><div><div class="line"><div class="line-probe line-text">E</div></div></div></div>
       <div class="background container">
         <div class="sidebar"><div class="filler"></div></div>
       </div>
@@ -1561,12 +1580,13 @@ function Egitor(){
       <div class="input-container"></div>
     </div>`;
 
-    this.sizeElement=      anchor.getElementsByClassName('size-probe')[0].firstElementChild;
-    this.backElement=      anchor.getElementsByClassName('background')[0];
-    this.textElement=      anchor.getElementsByClassName('text-field')[0];
-    this.cursorElement=    anchor.getElementsByClassName('cursor-overlay')[0].firstElementChild;
-    this.selectionElement= anchor.getElementsByClassName('selection-overlay')[0];
-    this.inputContainer=   anchor.getElementsByClassName('input-container')[0];
+    this.sizeElement=       anchor.getElementsByClassName('size-probe')[0].firstElementChild;
+    this.lineHeightElement= anchor.getElementsByClassName('line-probe')[0];
+    this.backElement=       anchor.getElementsByClassName('background')[0];
+    this.textElement=       anchor.getElementsByClassName('text-field')[0];
+    this.cursorElement=     anchor.getElementsByClassName('cursor-overlay')[0].firstElementChild;
+    this.selectionElement=  anchor.getElementsByClassName('selection-overlay')[0];
+    this.inputContainer=    anchor.getElementsByClassName('input-container')[0];
   }
 
   Editor.prototype._setupEvents= function() {
@@ -1625,6 +1645,10 @@ function Egitor(){
     }else if( lineRect.right < rootRect.left ) {
       ce.scrollLeft-= rootRect.left- lineRect.right;
     }
+  }
+
+  Editor.prototype._getHeightInLines= function() {
+    return this.sizeElement.clientHeight / this.lineHeightElement.clientHeight;
   }
 
   Editor.prototype.isFocused= function() {
