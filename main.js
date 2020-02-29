@@ -146,8 +146,20 @@ function Egitor(){
     // Check if position offset was provided
     let o= (typeof p === 'undefined') ? 0 : p;
 
-    this.beginLine= c.curLine;
-    this.beginChar= c.curChar+ o;
+    // Cursor object provided
+    if( c instanceof Cursor ) {
+      this.beginLine= c.curLine;
+      this.beginChar= c.curChar+ o;
+
+    // Line object provided
+    } else if( c instanceof Line ) {
+      this.beginLine= c;
+      this.beginChar= o;
+
+    } else {
+      throw Error('Invalid arguments');
+    }
+
     this.endLine= null;
     this.endChar= -1;
   }
@@ -699,6 +711,16 @@ function Egitor(){
     let s= this.curLine.getString();
     this.removeCurrentLine();
     return s;
+  }
+
+  Cursor.prototype.selectAll= function() {
+    if( this.selection ) {
+      this.selection.destroy();
+    }
+
+    const lines= currentContext.lines;
+    this.selection= new Selection( lines[0] );
+    this.move( lines.length-1, lines[lines.length-1].text.length, true );
   }
 
   Cursor.prototype.insertText= function( t ) {
@@ -1461,6 +1483,11 @@ function Egitor(){
 
             case 'D':
               cursor.duplicateLine();
+              break;
+
+            case 'a':
+            case 'A':
+              cursor.selectAll();
               break;
           }
         }
