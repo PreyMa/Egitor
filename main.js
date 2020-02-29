@@ -58,6 +58,27 @@ function Egitor(){
     }
   })();
 
+  // Sorted by priority: Letter > Symbol > WS
+  const CharType= {
+    None: -1,
+    Whitespace: 0,
+    Symbol: 1,
+    Letter: 2
+  };
+
+  function toCharType( c= null ) {
+    if( c === null || !c.length ) {
+      return CharType.None;
+    }
+    if( isWhitespace(c) ) {
+      return CharType.Whitespace;
+    }
+    if( isLetter(c) ) {
+      return CharType.Letter;
+    }
+    return CharType.Symbol;
+  }
+
   function deleteAllChildren( node ) {
     while( node.firstChild ) {
       node.removeChild( node.firstChild );
@@ -103,9 +124,12 @@ function Egitor(){
     new Styling( 'string', 'green' )
   ];
 
-  function Selection( c ) {
+  function Selection( c, p ) {
+    // Check if position offset was provided
+    let o= (typeof p === 'undefined') ? 0 : p;
+
     this.beginLine= c.curLine;
-    this.beginChar= c.curChar;
+    this.beginChar= c.curChar+ o;
     this.endLine= null;
     this.endChar= -1;
   }
@@ -297,7 +321,7 @@ function Egitor(){
     return this;
   }
 
-  Cursor.prototype.getNextChar= function() {
+  Cursor.prototype.getNextChar= function( wrapLine= true ) {
     const lines= currentContext.lines;
 
     if( this.curLine ) {
@@ -306,14 +330,14 @@ function Egitor(){
         return this.curLine.text.charAt( this.curChar+ 1 );
       }
       // Jump to the next line
-      if( this.curLine.number !== lines.length-1 ) {
+      if( wrapLine && (this.curLine.number !== lines.length-1) ) {
         return lines[ this.curLine.number+ 1 ].text.charAt( 0 );
       }
     }
     return '';
   }
 
-  Cursor.prototype.getPrevChar= function() {
+  Cursor.prototype.getPrevChar= function( wrapLine= true ) {
     const lines= currentContext.lines;
 
     if( this.curLine ) {
@@ -322,7 +346,7 @@ function Egitor(){
         return this.curLine.text.charAt( this.curChar- 1 );
       }
       // Jump to the next line
-      if( this.curLine.number ) {
+      if( wrapLine && this.curLine.number ) {
         const line= lines[ this.curLine.number- 1 ];
         return line.text.charAt( line.text.length-1 );
       }
@@ -536,6 +560,54 @@ function Egitor(){
 
     s.set( this, false ); // Set selection, but hide it
     this.removeSelection( s );
+  }
+
+  Cursor.prototype.findCharTypeLeft= function( t ) {
+    let i= this.curChar;
+    while( (i > 0) && (toCharType(this.curLine.text.charAt(i-1)) === t) ) {
+      i--;
+    }
+    return i;
+  }
+
+  Cursor.prototype.findCharTypeRight= function( t ) {
+    const str= this.curLine.text;
+    let i= this.curChar;
+    while( (i < str.length) && (toCharType(str.charAt(i)) === t) ) {
+      i++;
+    }
+    return i;
+  }
+
+  Cursor.prototype.selectNearestWord= function() {
+    let c= toCharType( this.getCurChar() );
+    let p= toCharType( this.getPrevChar() );
+
+    let l= this.curChar;
+    let r= this.curChar;
+
+    // If left and right are identical
+    if( p === c ) {
+      l= this.findCharTypeLeft( c );
+      r= this.findCharTypeRight( c );
+
+    // If left has a larger priority
+    } else if( p > c ) {
+      l= this.findCharTypeLeft( p );
+
+    // If right has a larger priority
+    } else {
+      r= this.findCharTypeRight( c );
+    }
+
+    if( this.selection ) {
+      this.selection.destroy();
+    }
+
+    // Beginn new selection
+    this.selection= new Selection( this, l- this.curChar );
+    // Move cursor to the end of the word/selection and create selection
+    this.move( this.curLine.number, r, true );
   }
 
   Cursor.prototype.removeCharacter= function( infront ) {
@@ -1213,7 +1285,7 @@ function Egitor(){
   InputAdapter.prototype.handleEvent= function( e, k= null, data= null ) {
     this.lastEvent= e;
     if( this.hasFocus && this.handler ) {
-      if( !(e instanceof KeyboardEvent) ) {
+      if( !(e instanceof KeyboardEvent) || e.ctrlKey ) {
         e.preventDefault();
       }
 
@@ -1304,6 +1376,13 @@ function Egitor(){
             case 'x':
             case 'X':
               input.toClipboard( cursor.cutCurrent() );
+              break;
+
+            case 'd':
+              cursor.selectNearestWord();
+              break;
+
+            case 'D':
               break;
           }
         }
