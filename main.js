@@ -213,10 +213,12 @@ function Egitor(){
     this.endChar= c.curChar;
 
     if( show ) {
-      this.forEach((l, b, e) => {
+      let s= this.lineSpan();
+      this.forEach((l, b, e, i) => {
         if( b < 0 ) {
           l.selectLine();
         } else {
+          e= (s > 1) && !i ? e+1 : e;
           l.setSelection( b, e );
         }
       });
@@ -550,6 +552,15 @@ function Egitor(){
     }
   }
 
+  Cursor.prototype.moveBOF= function( shift ) {
+    this.move( 0, 0, shift );
+  }
+
+  Cursor.prototype.moveEOF= function( shift ) {
+    const lines= currentContext.lines;
+    this.move( lines.length-1, lines[lines.length-1].text.length, shift );
+  }
+
   Cursor.prototype.moveLines= function( num, select ) {
     // Move the cursor by a specified number of lines
     // Negative offsets move the cursor up, positives down
@@ -728,7 +739,7 @@ function Egitor(){
 
     const lines= currentContext.lines;
     this.selection= new Selection( lines[0] );
-    this.move( lines.length-1, lines[lines.length-1].text.length, true );
+    this.moveEOF( true );
   }
 
   Cursor.prototype.insertText= function( t ) {
@@ -910,9 +921,9 @@ function Egitor(){
     return (this.number === currentContext.lines.length-1);
   }
 
-  Line.prototype.selectLine= function( p= 0 ) {
+  Line.prototype.selectLine= function( pos= 0 ) {
     // Select whole line
-    this.setSelection( p, -1 );
+    this.setSelection( pos, -1 );
   }
 
   Line.prototype.unsetSelection= function() {
@@ -921,12 +932,22 @@ function Egitor(){
   }
 
   Line.prototype.setSelection= function( begin, end ) {
+    const lineClass= 'full-line-selection';
     const c= this.selectionOverlayElement.children[1];
+    // Remove selection
     if( begin < 0 ) {
       c.children[0].innerHTML= '';
       c.children[1].innerHTML= '';
+      c.classList.remove( lineClass )
+
+    // Create/Update selection
     } else {
-      end= end < 0 ? this.text.length : end;
+      // Full line selection that takes up the whole editor length
+      if( (end < 0) || (end > this.text.length) ) {
+        end= begin+1;
+        c.classList.add( lineClass );
+      }
+      // Set width of the selection elements
       c.children[0].innerHTML= ''.padStart( begin, ' ');
       c.children[1].innerHTML= ''.padStart( end-begin, ' ');
     }
@@ -1525,11 +1546,11 @@ function Egitor(){
             break;
 
           case _End:
-            cursor.moveEnd( s );
+            e.ctrlKey ? cursor.moveEOF( s ) : cursor.moveEnd( s );
             break;
 
           case _Pos1:
-            cursor.moveBegin( s );
+            e.ctrlKey ? cursor.moveBOF( s ) : cursor.moveBegin( s );
             break;
 
           case _Backspace:
@@ -1574,18 +1595,18 @@ function Egitor(){
       <div class="background container">
         <div class="sidebar"><div class="filler"></div></div>
       </div>
-      <div class="selection-overlay container"><div class="filler"></div></div>
-      <div class="text-field container" ><div class="filler"></div></div>
-      <div class= "cursor-overlay container"><div class="cursor-content"><div class="filler"></div></div></div>
+      <div class="selection-overlay container"><div class="overlay-content"><div class="filler"></div></div></div>
+      <div class="text-field container" ><div class="overlay-content"><div class="filler"></div></div></div>
+      <div class= "cursor-overlay container"><div class="overlay-content"><div class="filler"></div></div></div>
       <div class="input-container"></div>
     </div>`;
 
     this.sizeElement=       anchor.getElementsByClassName('size-probe')[0].firstElementChild;
     this.lineHeightElement= anchor.getElementsByClassName('line-probe')[0];
     this.backElement=       anchor.getElementsByClassName('background')[0];
-    this.textElement=       anchor.getElementsByClassName('text-field')[0];
+    this.textElement=       anchor.getElementsByClassName('text-field')[0].firstElementChild;
     this.cursorElement=     anchor.getElementsByClassName('cursor-overlay')[0].firstElementChild;
-    this.selectionElement=  anchor.getElementsByClassName('selection-overlay')[0];
+    this.selectionElement=  anchor.getElementsByClassName('selection-overlay')[0].firstElementChild;
     this.inputContainer=    anchor.getElementsByClassName('input-container')[0];
   }
 
@@ -1604,8 +1625,8 @@ function Egitor(){
       if( doScroll ) {
         doScroll= false;
         window.requestAnimationFrame(() => {
-          copyElementScroll( ce, this.textElement );
-          copyElementScroll( ce, this.selectionElement );
+          copyElementScroll( ce, this.textElement.parentElement );
+          copyElementScroll( ce, this.selectionElement.parentElement );
           copyElementScroll( ce, this.backElement );
           doScroll= true;
         });

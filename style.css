@@ -34,7 +34,7 @@
   visibility: hidden;
 }
 
-.cursor-content {
+.overlay-content {
   display: inline-block;
 }
 
@@ -104,6 +104,15 @@
 .selected {
   background-color: lightblue;
   white-space: pre;
+  display: inline-block;
+}
+
+.full-line-selection {
+  width: calc( 100% - 70px );
+}
+
+.full-line-selection > span {
+  width: 100%;
 }
 
 .Selection-overlay {
