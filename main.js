@@ -218,6 +218,7 @@ function Egitor(){
         if( b < 0 ) {
           l.selectLine();
         } else {
+          // If the first line is not the last make it wrap two
           e= (s > 1) && !i ? e+1 : e;
           l.setSelection( b, e );
         }
@@ -707,9 +708,11 @@ function Egitor(){
       this.curLine.reset();
     } else {
       this.curLine.destroy();
-      this.curLine= lines[ this.curLine.number ];
     }
-    this.move( this.curLine.number, 0 );
+
+    // Move to line above if the deleted one was the last
+    let n= this.curLine.number;
+    this.move( n < lines.length ? n : n-1, 0 );
   }
 
   Cursor.prototype.copyCurrent= function() {
@@ -850,6 +853,22 @@ function Egitor(){
     new Line( this.curLine.number, d );
   }
 
+  Cursor.prototype.swapLine= function( up= false) {
+    const m= currentContext.lines.length;
+    const n= this.curLine.number;
+    // Replace with line above
+    if( up ) {
+      if( n > 0 ) {
+        this.curLine.setPosition( n-1 );
+      }
+    // Replace with line underneath
+    } else {
+      if( n < m-1 ) {
+        this.curLine.setPosition( n+1 );
+      }
+    }
+  }
+
 
   function Line( pos= 0, content= null, updateLines= true ) {
   	this.number= pos;
@@ -878,10 +897,6 @@ function Egitor(){
 
     this.cursorOverlayElement= overlay;
 
-    // Add line to the array of lines
-    const lines= currentContext.lines;
-  	lines.splice( pos, 0, this );
-
     // Insert text
     if( content !== null ) {
       this.append( content );
@@ -889,6 +904,22 @@ function Egitor(){
       // Add default styling
       this.addDefaultStyling();
     }
+
+    // Attach the line to the DOM and the lines-array
+    this.attachLineToDOM();
+
+    // Update all following lines
+    if( updateLines ) {
+      this.updateLineNumbers();
+    }
+  }
+
+  Line.prototype.attachLineToDOM= function() {
+    const pos= this.number;
+    const lines= currentContext.lines;
+
+    // Add line to the array of lines
+  	lines.splice( pos, 0, this );
 
     // Attach line elements in their respective layers
     const t= currentContext.textElement;
@@ -898,16 +929,11 @@ function Egitor(){
     t.insertBefore( this.textElement, t.children[ pos ]);
     o.insertBefore( this.cursorOverlayElement, o.children[ pos ]);
     s.insertBefore( this.selectionOverlayElement, s.children[pos]);
-
-    // Update all following lines
-    if( updateLines ) {
-      this.updateLineNumbers();
-    }
   }
 
-  Line.prototype.updateLineNumbers= function() {
+  Line.prototype.updateLineNumbers= function( e= -1 ) {
     const lines= currentContext.lines;
-    for( let i= this.number; i< lines.length; i++ ) {
+    for( let i= this.number; (i< lines.length) && ((e < 0) || (i < e)); i++ ) {
       lines[i].setNumber( i );
     }
   }
@@ -1289,6 +1315,29 @@ function Egitor(){
     }
   }
 
+  Line.prototype.setPosition= function( idx ) {
+    const lines= currentContext.lines;
+    if( idx < 0 || idx >= lines.length ) {
+      throw Error('Invalid arguments');
+    }
+
+    // Remove line from DOM
+    this.destroy( false );
+
+    // Attach line to DOM at the new position
+    const oldPos= this.number;
+    this.setNumber( idx );
+    this.attachLineToDOM();
+
+    // Only update the line inbetween the two positions
+    if( oldPos < idx ) {
+      lines[oldPos].setNumber( oldPos, false );
+      lines[oldPos].updateLineNumbers( idx+1 );
+    } else {
+      this.updateLineNumbers( oldPos+1 );
+    }
+  }
+
   Line.prototype.setCursor= function( col ) {
   	col= col<= this.text.length ? col : this.text.length;
     this.cursorOverlayElement.children[1].innerHTML= '|'.padStart( col+1, ' ' );
@@ -1413,12 +1462,14 @@ function Egitor(){
   InputAdapter.prototype.handleEvent= function( e, k= null, data= null ) {
     this.lastEvent= e;
     if( this.hasFocus && this.handler ) {
-      if( !(e instanceof KeyboardEvent) || e.ctrlKey ) {
+      const copyPaste= (e.ctrlKey && (e.key === 'v' || e.key === 'c' || e.key === 'x'));
+
+      if( !(e instanceof KeyboardEvent) || (e.ctrlKey && !copyPaste)) {
         e.preventDefault();
       }
 
       // Either substitute key provided or not Ctrl+c/v/x
-      if( k || !(e.ctrlKey && (e.key === 'v' || e.key === 'c' || e.key === 'x')) ) {
+      if( k || !copyPaste ) {
         this.handler( k ? k : e, data );
       }
       this.element.value= '';
@@ -1530,11 +1581,11 @@ function Egitor(){
             break;
 
           case _ArrowUp:
-            cursor.moveUp( s );
+            e.ctrlKey ? cursor.swapLine( true ) : cursor.moveUp( s );
             break;
 
           case _ArrowDown:
-            cursor.moveDown( s );
+            e.ctrlKey ? cursor.swapLine( false ) : cursor.moveDown( s );
             break;
 
           case _ArrowLeft:
