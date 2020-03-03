@@ -1666,7 +1666,7 @@ function Egitor(){
     let isMouseOver= false;
     this.anchor.addEventListener('mouseover', () => { isMouseOver= true;  });
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
-    document.addEventListener('click', (e) => { isMouseOver ? this.focus() : this.unfocus(); e.preventDefault(); });
+    document.addEventListener('click', (e) => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
 
     // Set scroll position for all stacked overlays
     // Only run every frame and ignore any other incoming events
@@ -1683,6 +1683,24 @@ function Egitor(){
         });
       }
     });
+  }
+
+  Editor.prototype._setCoursorByClick= function( e ) {
+    this._setCoursorToXY( e.clientX, e.clientY );
+  }
+
+  Editor.prototype._setCoursorToXY= function( x, y, select= false ) {
+    const ce= this.cursorElement.parentElement;
+    const char= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
+    const pos= this.sizeElement.getBoundingClientRect();
+
+    // Calculate the line number: (pos inside the editor div + scroll) / height of line
+    const line= clamp( Math.floor( (y- pos.top+ ce.scrollTop) / char.height ), 0, this.lines.length-1 );
+
+    // Calculate the column number: (pso inside the editor div + scroll) / width of character
+    const col=  Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
+
+    this.cursor.move( line, col, select );
   }
 
   Editor.prototype._updateWidths= function() {
@@ -1737,7 +1755,8 @@ function Egitor(){
   }
 
   Editor.prototype.focus= function() {
-    if( !this.isFocused() ) {
+    const wasFocused= this.isFocused();
+    if( !wasFocused ) {
       console.log('focus');
       // Unfocus context if one is currently focused
       if( currentContext ) {
@@ -1756,6 +1775,8 @@ function Egitor(){
     if( this._isConstruct ) {
       this.input.setFocus( true );
     }
+
+    return wasFocused;
   }
 
   Editor.prototype._getTabulator= function() {
