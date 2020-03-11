@@ -35,6 +35,10 @@ function Egitor(){
     return v;
   }
 
+  function isInRange( x, min, max ) {
+    return x>min && x<max;
+  }
+
   function copyElementWidth( from, to, off= 0 ) {
     to.style.width=  ''+ (off+ from.scrollWidth)+ 'px';
   }
@@ -57,6 +61,43 @@ function Egitor(){
       return s.match( re ) ? true : false;
     }
   })();
+
+
+  function Vector( x, y ) {
+    this.set(x, y);
+  }
+
+  Vector.prototype.isEqual= function( x, y ) {
+    // Compare two vectors
+    if( typeof y === 'undefined' ) {
+      y= x.y;
+      x= x.x;
+    }
+
+    return (this.x === x) && (this.y === y);
+  }
+
+  Vector.prototype.set= function( x, y ) {
+    // Set vectors x and y component
+    if( x && typeof y === 'undefined' ) {
+      y= x.y;
+      x= x.x;
+    }
+
+    this.x= x || 0;
+    this.y= y || 0;
+  }
+
+  Vector.prototype.insideBox= function( xt, yt, xb, yb ) {
+    // Check whether the vector point (X,Y) is inside a box created by two opposide points
+    // left top (xt,yt) and rigth bottom (xb,yb)
+    return (this.x > xt) && (this.y > yt) && (this.x < xb) && (this.y < yb);
+  }
+
+  Vector.prototype.mag= function() {
+    // Calculate the magnitude
+    return Math.sprt( this.x ** 2+ this.y ** 2 );
+  }
 
   // Sorted by priority: Letter > Symbol > WS
   const CharType= {
@@ -226,9 +267,9 @@ function Egitor(){
     }
   };
 
-  Selection.StopLoop= false;  // Break/Short circuit from the forEach loop
-  Selection.NoIncrement= 1;   // Stay at the current index
-  Selection.DoubleIncrement= 2;
+  Selection.StopLoop= false;    // Break/Short circuit from the forEach loop
+  Selection.NoIncrement= 1;     // Stay at the current index
+  Selection.DoubleIncrement= 2; // Move two indeces at a time
 
   Selection.prototype.forEach= function( fn ) {
     let n= this.normalize();
@@ -692,10 +733,10 @@ function Egitor(){
 
   Cursor.prototype.selectionToString= function() {
     let t= '';
+    const sp= this.selection.lineSpan();
     this.selection.forEach( (l, b, e, i) => {
       // Don't add a NL if its the last line
-      // -> neither the first line (!i) nor an line inbetween (b>=0)
-      t += l.getString( b, e, ((b >= 0) && !i) );
+      t += l.getString( b, e, i+1 < sp );
     });
 
     return t;
@@ -1508,6 +1549,8 @@ function Egitor(){
 
   function Editor( anchor ) {
     this.tabLength= 2;
+    this.mousePos= new Vector();
+    this.mousePagePos= new Vector();
 
     this.focus();
 
@@ -1666,13 +1709,74 @@ function Egitor(){
     let isMouseOver= false;
     this.anchor.addEventListener('mouseover', () => { isMouseOver= true;  });
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
-    document.addEventListener('click', (e) => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
+    document.addEventListener('mousedown', e => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
+
+    let selTimer= null;
+    let doDrag= true;
+    document.addEventListener('mousemove', e => {
+      // Debounce events
+      if( doDrag ) {
+        doDrag= false;
+        window.requestAnimationFrame(() => {
+          // Check if mouse position has actually changed
+          if( !this.mousePagePos.isEqual( e.pageX, e.pageY ) ) {
+            this.mousePos.set( e.clientX, e.clientY );
+            this.mousePagePos.set( e.pageX, e.pageY );
+
+            // Check if only the left (primary) mouse button is held down
+            if( e.buttons === 1 ) {
+              if( this.isFocused() ) {
+
+                // Handle selection inside the editor viewport
+                if( this._mouseInViewportY() ) {
+                  if( selTimer ) {
+                    window.clearTimeout( selTimer );
+                    selTimer= null;
+                  }
+
+                  this._setCoursorToXY( e.clientX, e.clientY, true );
+                } else {
+                  // Don't override the timer
+                  if( !selTimer ) {
+                    const runTimer= () => {
+                      const sz= this.sizeElement.getBoundingClientRect();
+
+                      // Calculate number of ms to pause before the next line will be selected
+                      let offset= (this.mousePos.y < sz.top) ? sz.top- mousePos.y : this.mousePos.y- sz.bottom;
+                      let speed= clamp( 200- 0.8* offset, 20, 5000);
+                      selTimer= window.setTimeout(() => {
+                        if( this._mouseInViewportY() || !document.hasFocus() ) {
+                          selTimer= null;
+                          return;
+                        }
+
+                        // Move cursor either up or down
+                        let up= this.mousePos.y < sz.top;
+                        this._moveCursorToLineX( up, this.mousePos.x, true );
+
+                        // Next iteration
+                        runTimer();
+                      }, speed );
+                    };
+
+                    // Start timer
+                    runTimer();
+                  }
+                }
+              }
+            }
+          }
+          doDrag= true;
+        });
+      }
+    });
 
     // Set scroll position for all stacked overlays
     // Only run every frame and ignore any other incoming events
     let doScroll= true;
     const ce= this.cursorElement.parentElement;
     ce.addEventListener('scroll', () => {
+      // Debounce events
       if( doScroll ) {
         doScroll= false;
         window.requestAnimationFrame(() => {
@@ -1698,7 +1802,19 @@ function Egitor(){
     const line= clamp( Math.floor( (y- pos.top+ ce.scrollTop) / char.height ), 0, this.lines.length-1 );
 
     // Calculate the column number: (pso inside the editor div + scroll) / width of character
-    const col=  Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
+    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
+
+    this.cursor.move( line, col, select );
+  }
+
+  Editor.prototype._moveCursorToLineX= function( up, x, select= false ) {
+    const ce= this.cursorElement.parentElement;
+    const char= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
+
+    let line= this.cursor.curLine.number;
+    line= clamp( line+ (up ? -1 : 1), 0, this.lines.length-1 );
+
+    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
 
     this.cursor.move( line, col, select );
   }
@@ -1743,6 +1859,11 @@ function Egitor(){
 
   Editor.prototype.isFocused= function() {
     return this === currentContext;
+  }
+
+  Editor.prototype._mouseInViewportY= function() {
+    const vp= this.sizeElement.getBoundingClientRect();
+    return isInRange( this.mousePos.y, vp.top, vp.bottom );
   }
 
   Editor.prototype.unfocus= function() {
