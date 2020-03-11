@@ -1,4 +1,5 @@
 function Egitor(){
+  'use strict';
 
   const createCSSClass= (function() {
     const styleElement= document.createElement('style');
@@ -253,7 +254,7 @@ function Egitor(){
       if( (el.number < cl.number) && (el.number < bl.number) ) {
         this._removeOld( cl, false );
       // Cursor moved line up and the selection is from top to bottom
-    } else if( (el.number > cl.number) && (el.number > bl.number) ) {
+      } else if( (el.number > cl.number) && (el.number > bl.number) ) {
         this._removeOld( cl, true );
       }
     }
@@ -1684,7 +1685,9 @@ function Egitor(){
       this._updateWidths(); // Make all overlays as big as the text layer
     });
 
-
+    this.viewport= null;
+    this.charDimensions= null;
+    this.updateViewport();  // Initially get the size of the viewport
 
     // Initially ocus the editor
     this._isConstruct= true;
@@ -1750,7 +1753,7 @@ function Egitor(){
                   // Don't override the timer
                   if( !selTimer ) {
                     const runTimer= () => {
-                      const sz= this.sizeElement.getBoundingClientRect();
+                      const sz= this.viewport;
 
                       // Calculate number of ms to pause before the next line will be selected
                       let offset= (this.mousePos.y < sz.top) ? sz.top- this.mousePos.y : this.mousePos.y- sz.bottom;
@@ -1798,6 +1801,20 @@ function Egitor(){
         });
       }
     });
+
+    // Update viewport on scroll
+    document.body.addEventListener('scroll', () => {
+      // Debounce events
+      if( doScroll ) {
+        doScroll= false;
+        window.requestAnimationFrame(() => {
+          this.updateViewport();
+          doScroll= true;
+        });
+      }
+    });
+
+    window.addEventListener('resize', () => { this.updateViewport() } );
   }
 
   Editor.prototype._setCoursorByClick= function( e ) {
@@ -1806,8 +1823,8 @@ function Egitor(){
 
   Editor.prototype._setCoursorToXY= function( x, y, select= false ) {
     const ce= this.cursorElement.parentElement;
-    const char= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
-    const pos= this.sizeElement.getBoundingClientRect();
+    const char= this.charDimensions;
+    const pos= this.viewport;
 
     // Calculate the line number: (pos inside the editor div + scroll) / height of line
     const line= clamp( Math.floor( (y- pos.top+ ce.scrollTop) / char.height ), 0, this.lines.length-1 );
@@ -1820,7 +1837,7 @@ function Egitor(){
 
   Editor.prototype._moveCursorToLineX= function( up, x, select= false ) {
     const ce= this.cursorElement.parentElement;
-    const char= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
+    const char= this.charDimensions;
 
     let line= this.cursor.curLine.number;
     line= clamp( line+ (up ? -1 : 1), 0, this.lines.length-1 );
@@ -1841,7 +1858,7 @@ function Egitor(){
     // Get bounding boxes for current overlay line and editor root element
     const ovLine= this.cursor.curLine.cursorOverlayElement.children[1];
     const lineRect= ovLine.getBoundingClientRect();
-    const rootRect= this.sizeElement.getBoundingClientRect();
+    const rootRect= this.viewport;
 
     const ce= this.cursorElement.parentElement;
 
@@ -1873,8 +1890,13 @@ function Egitor(){
   }
 
   Editor.prototype._mouseInViewportY= function() {
-    const vp= this.sizeElement.getBoundingClientRect();
+    const vp= this.viewport;
     return isInRange( this.mousePos.y, vp.top, vp.bottom );
+  }
+
+  Editor.prototype.updateViewport= function() {
+    this.viewport= this.sizeElement.getBoundingClientRect();
+    this.charDimensions= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
   }
 
   Editor.prototype.unfocus= function() {
