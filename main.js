@@ -40,6 +40,20 @@ function Egitor(){
     return x>min && x<max;
   }
 
+  function debounce( fn ) {
+    let deb= true;
+    return function() {
+      if( deb ) {
+        deb= false;
+
+        requestAnimationFrame( () => {
+          fn.apply(window, arguments );
+          deb= true;
+        });
+      }
+    }
+  }
+
   function copyElementWidth( from, to, off= 0 ) {
     to.style.width=  ''+ (off+ from.scrollWidth)+ 'px';
   }
@@ -1726,94 +1740,68 @@ function Egitor(){
     document.addEventListener('mousedown', e => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
 
     let selTimer= null;
-    let doDrag= true;
-    document.addEventListener('mousemove', e => {
-      // Debounce events
-      if( doDrag ) {
-        doDrag= false;
-        window.requestAnimationFrame(() => {
-          // Check if mouse position has actually changed
-          if( !this.mousePagePos.isEqual( e.pageX, e.pageY ) ) {
-            this.mousePos.set( e.clientX, e.clientY );
-            this.mousePagePos.set( e.pageX, e.pageY );
+    document.addEventListener('mousemove', debounce( e => {
+      // Check if mouse position has actually changed
+      if( !this.mousePagePos.isEqual( e.pageX, e.pageY ) ) {
+        this.mousePos.set( e.clientX, e.clientY );
+        this.mousePagePos.set( e.pageX, e.pageY );
 
-            // Check if only the left (primary) mouse button is held down
-            if( e.buttons === 1 ) {
-              if( this.isFocused() ) {
+        // Check if only the left (primary) mouse button is held down
+        if( e.buttons === 1 ) {
+          if( this.isFocused() ) {
 
-                // Handle selection inside the editor viewport
-                if( this._mouseInViewportY() ) {
-                  if( selTimer ) {
-                    window.clearTimeout( selTimer );
-                    selTimer= null;
-                  }
+            // Handle selection inside the editor viewport
+            if( this._mouseInViewportY() ) {
+              if( selTimer ) {
+                window.clearTimeout( selTimer );
+                selTimer= null;
+              }
 
-                  this._setCoursorToXY( e.clientX, e.clientY, true );
-                } else {
-                  // Don't override the timer
-                  if( !selTimer ) {
-                    const runTimer= () => {
-                      const sz= this.viewport;
+              this._setCoursorToXY( e.clientX, e.clientY, true );
+            } else {
+              // Don't override the timer
+              if( !selTimer ) {
+                const runTimer= () => {
+                  const sz= this.viewport;
 
-                      // Calculate number of ms to pause before the next line will be selected
-                      let offset= (this.mousePos.y < sz.top) ? sz.top- this.mousePos.y : this.mousePos.y- sz.bottom;
-                      let speed= clamp( 200- 0.8* offset, 20, 5000);
-                      selTimer= window.setTimeout(() => {
-                        if( this._mouseInViewportY() || !document.hasFocus() ) {
-                          selTimer= null;
-                          return;
-                        }
+                  // Calculate number of ms to pause before the next line will be selected
+                  let offset= (this.mousePos.y < sz.top) ? sz.top- this.mousePos.y : this.mousePos.y- sz.bottom;
+                  let speed= clamp( 200- 0.8* offset, 20, 5000);
+                  selTimer= window.setTimeout(() => {
+                    if( this._mouseInViewportY() || !document.hasFocus() ) {
+                      selTimer= null;
+                      return;
+                    }
 
-                        // Move cursor either up or down
-                        let up= this.mousePos.y < sz.top;
-                        this._moveCursorToLineX( up, this.mousePos.x, true );
+                    // Move cursor either up or down
+                    let up= this.mousePos.y < sz.top;
+                    this._moveCursorToLineX( up, this.mousePos.x, true );
 
-                        // Next iteration
-                        runTimer();
-                      }, speed );
-                    };
-
-                    // Start timer
+                    // Next iteration
                     runTimer();
-                  }
-                }
+                  }, speed );
+                };
+
+                // Start timer
+                runTimer();
               }
             }
           }
-          doDrag= true;
-        });
+        }
       }
-    });
+    }) );
 
     // Set scroll position for all stacked overlays
     // Only run every frame and ignore any other incoming events
-    let doScroll= true;
     const ce= this.cursorElement.parentElement;
-    ce.addEventListener('scroll', () => {
-      // Debounce events
-      if( doScroll ) {
-        doScroll= false;
-        window.requestAnimationFrame(() => {
-          copyElementScroll( ce, this.textElement.parentElement );
-          copyElementScroll( ce, this.selectionElement.parentElement );
-          copyElementScroll( ce, this.backElement );
-          doScroll= true;
-        });
-      }
-    });
+    ce.addEventListener('scroll', debounce(() => {
+      copyElementScroll( ce, this.textElement.parentElement );
+      copyElementScroll( ce, this.selectionElement.parentElement );
+      copyElementScroll( ce, this.backElement );
+    }) );
 
-    // Update viewport on scroll
-    document.body.addEventListener('scroll', () => {
-      // Debounce events
-      if( doScroll ) {
-        doScroll= false;
-        window.requestAnimationFrame(() => {
-          this.updateViewport();
-          doScroll= true;
-        });
-      }
-    });
-
+    // Update viewport on scroll and window resize
+    document.body.addEventListener('scroll', debounce( () => this.updateViewport() ));
     window.addEventListener('resize', () => { this.updateViewport() } );
   }
 
