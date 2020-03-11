@@ -237,15 +237,24 @@ function Egitor(){
     return Math.abs( this.beginLine.number- this.endLine.number )+ 1;
   }
 
+  Selection.prototype._removeOld= function( c, up ) {
+    let off= up ? -1 : +1;
+    for( let i= this.endLine.number; i !== c.number; i+= off ) {
+      currentContext.lines[i].unsetSelection();
+    }
+  }
+
   Selection.prototype.set= function( c, show= true ) {
+    const el= this.endLine, bl= this.beginLine;
+    const cl= c.curLine;
     // Check if the selection changed line and the selection shrunk
-    if( this.endLine && (this.endLine !== c.curLine) ) {
-      // Cursor moved line down and the selection is from top to bottom
-      if( (this.endLine.number < c.curLine.number) && (this.endLine.number < this.beginLine.number) ) {
-        this.endLine.unsetSelection();
-      // Cursor moved line up and the selection is from bottom to top
-      } else if( (this.endLine.number > c.curLine.number) && (this.endLine.number > this.beginLine.number) ) {
-        this.endLine.unsetSelection();
+    if( el && (el !== cl) ) {
+      // Cursor moved line down and the selection is from bottom to top
+      if( (el.number < cl.number) && (el.number < bl.number) ) {
+        this._removeOld( cl, false );
+      // Cursor moved line up and the selection is from top to bottom
+    } else if( (el.number > cl.number) && (el.number > bl.number) ) {
+        this._removeOld( cl, true );
       }
     }
 
@@ -259,7 +268,7 @@ function Egitor(){
         if( b < 0 ) {
           l.selectLine();
         } else {
-          // If the first line is not the last make it wrap two
+          // If the first line is not the last make it wrap too
           e= (s > 1) && !i ? e+1 : e;
           l.setSelection( b, e );
         }
@@ -1013,6 +1022,8 @@ function Egitor(){
       if( (end < 0) || (end > this.text.length) ) {
         end= begin+1;
         c.classList.add( lineClass );
+      } else {
+        c.classList.remove( lineClass );
       }
       // Set width of the selection elements
       c.children[0].innerHTML= ''.padStart( begin, ' ');
@@ -1742,7 +1753,7 @@ function Egitor(){
                       const sz= this.sizeElement.getBoundingClientRect();
 
                       // Calculate number of ms to pause before the next line will be selected
-                      let offset= (this.mousePos.y < sz.top) ? sz.top- mousePos.y : this.mousePos.y- sz.bottom;
+                      let offset= (this.mousePos.y < sz.top) ? sz.top- this.mousePos.y : this.mousePos.y- sz.bottom;
                       let speed= clamp( 200- 0.8* offset, 20, 5000);
                       selTimer= window.setTimeout(() => {
                         if( this._mouseInViewportY() || !document.hasFocus() ) {
