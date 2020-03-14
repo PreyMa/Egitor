@@ -1407,7 +1407,7 @@ function Egitor(){
         next.destroy();
 
         // Request to keep the cursor at the same position
-        // (Actually not necessary as _Delete does not move the cursor anyway)
+        // (Actually not necessary as KeyCodes.Delete does not move the cursor anyway)
         return len;
       }
     // Remove some char in the line
@@ -1861,6 +1861,28 @@ function Egitor(){
 
 
   /**
+  * Predefined key codes for special keys
+  **/
+  const KeyCodes= {
+    Enter: 13,
+    ArrowUp: 38,
+    ArrowLeft: 37,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    End: 35,
+    Pos1: 36,
+    Backspace: 8,
+    Tabulator: 9,
+    Delete: 46,
+    PageUp: 33,
+    PageDown: 34,
+    letterV: 86,
+    letterC: 67,
+    letterX: 88
+  };
+
+
+  /**
   * Input Adapter class
   * Provides an event source from the keyboard that also captures genuine
   * copy/paste events that can access the clipboard. Creates a hidden textarea
@@ -1879,9 +1901,9 @@ function Egitor(){
 
     this.lastEvent= null;
 
-    const _ctrl_v= {key: 'v', keyCode: 86, ctrlKey: true, shiftKey: false};
-    const _ctrl_c= {key: 'c', keyCode: 67, ctrlKey: true, shiftKey: false};
-    const _ctrl_x= {key: 'x', keyCode: 88, ctrlKey: true, shiftKey: false};
+    const _ctrl_v= {key: 'v', keyCode: KeyCodes.letterV, ctrlKey: true, shiftKey: false};
+    const _ctrl_c= {key: 'c', keyCode: KeyCodes.letterC, ctrlKey: true, shiftKey: false};
+    const _ctrl_x= {key: 'x', keyCode: KeyCodes.letterX, ctrlKey: true, shiftKey: false};
 
     // Add keyboard event handlers to the hidden textarea element
     t.addEventListener( 'keydown', (e) => { this.handleEvent( e ); });
@@ -1927,18 +1949,6 @@ function Egitor(){
     }
   }
 
-  const _Enter= 13;
-  const _ArrowUp= 38;
-  const _ArrowLeft= 37;
-  const _ArrowRight= 39;
-  const _ArrowDown= 40;
-  const _End= 35;
-  const _Pos1= 36;
-  const _Backspace= 8;
-  const _Tabulator= 9;
-  const _Delete= 46;
-  const _PageUp= 33;
-  const _PageDown= 34;
 
   /**
   * Editor class
@@ -2032,52 +2042,52 @@ function Egitor(){
       } else {
         const s= e.shiftKey;
       	switch( e.keyCode ) {
-          case _Enter:
+          case KeyCodes.Enter:
             cursor.newLine();
             break;
 
-          case _ArrowUp:
+          case KeyCodes.ArrowUp:
             e.ctrlKey ? cursor.swapLine( true ) : cursor.moveUp( s );
             break;
 
-          case _ArrowDown:
+          case KeyCodes.ArrowDown:
             e.ctrlKey ? cursor.swapLine( false ) : cursor.moveDown( s );
             break;
 
-          case _ArrowLeft:
+          case KeyCodes.ArrowLeft:
             e.ctrlKey ? cursor.movePreviousWord( s ) : cursor.movePrevious( s );
             break;
 
-          case _ArrowRight:
+          case KeyCodes.ArrowRight:
             e.ctrlKey ? cursor.moveNextWord( s ) : cursor.moveNext( s );
             break;
 
-          case _End:
+          case KeyCodes.End:
             e.ctrlKey ? cursor.moveEOF( s ) : cursor.moveEnd( s );
             break;
 
-          case _Pos1:
+          case KeyCodes.Pos1:
             e.ctrlKey ? cursor.moveBOF( s ) : cursor.moveBegin( s );
             break;
 
-          case _Backspace:
+          case KeyCodes.Backspace:
             e.ctrlKey ? cursor.removeWord( false ) : cursor.removeCharacter( false );
             break;
 
-          case _Delete:
+          case KeyCodes.Delete:
             e.ctrlKey ? cursor.removeWord( true ) : cursor.removeCharacter( true );
             break;
 
-          case _Tabulator:
+          case KeyCodes.Tabulator:
             cursor.writeCharacter( this._getTabulator() );
             e.preventDefault(); // Prevent unfocus via tab key
             break;
 
-          case _PageDown:
+          case KeyCodes.PageDown:
             cursor.moveLines( Math.round( this._getHeightInLines() ), s );
             break;
 
-          case _PageUp:
+          case KeyCodes.PageUp:
             cursor.moveLines( -Math.round( this._getHeightInLines() ), s );
             break;
         }
