@@ -395,7 +395,7 @@ function Egitor(){
 
     this.onMove= null;
 
-    this.newLine();
+    this._newLine();
   }
 
   Cursor.prototype.getCurChar= function() {
@@ -467,16 +467,21 @@ function Egitor(){
     return '';
   }
 
-  Cursor.prototype.writeCharacter= function( c ) {
+  Cursor.prototype._writeCharacter= function( c ) {
     if( this.selection ) {
       this.removeSelection();
     }
 
   	this.curLine.writeCharacter( this.curChar, c );
-    this.move( this.curLine.number, this.curChar+ c.length );
+    this._move( this.curLine.number, this.curChar+ c.length );
   }
 
-  Cursor.prototype.newLine= function() {
+  Cursor.prototype.writeCharacter= function( c ) {
+    currentContext.actions.event( new AddWordAction( this, c ) );
+    this._writeCharacter( c );
+  }
+
+  Cursor.prototype._newLine= function( updLines ) {
     if( this.selection ) {
       this.removeSelection();
     }
@@ -485,7 +490,7 @@ function Egitor(){
 
     // Move the text infront of the cursor to the new line
     let text= this.curLine ? this.curLine.split( this.curChar ) : null;
-    let line= new Line( num, text );
+    let line= new Line( num, text, updLines );
 
     // Make line current if it is the first line in the document
     if( !this.curLine ) {
@@ -493,10 +498,15 @@ function Egitor(){
     }
 
     // Move to the begin of the new line
-    this.move( num, 0 );
+    this._move( num, 0 );
   }
 
-  Cursor.prototype.move= function( line, col, select= false, keepShadow= false ) {
+  Cursor.prototype.newLine= function() {
+    currentContext.actions.event( new AddLineAction( this ) );
+    this._newLine();
+  }
+
+  Cursor.prototype._move= function( line, col, select= false, keepShadow= false ) {
     // Create new selection if none is currently active
     if( select && !this.selection ) {
       this.selection= new Selection( this );
@@ -523,16 +533,18 @@ function Egitor(){
 
     } else {
       // If a selection is active delete it
-      if( this.selection ) {
-        this.selection.destroy();
-        this.selection= null;
-      }
+      this.unselect();
     }
 
     // Call event listner if one is currently set
     if( this.onMove ) {
       this.onMove();
     }
+  }
+
+  Cursor.prototype.move= function( l, c, s, k ) {
+    currentContext.actions.event( CursorMoveAction.get() );
+    this._move( l, c, s, k );
   }
 
   Cursor.prototype.moveUp= function( select ) {
@@ -661,7 +673,7 @@ function Egitor(){
     }
 
     selection.destroy();
-    this.move( first.number, begin );
+    this._move( first.number, begin );
     this.curLine.updateLineNumbers();
   }
 
@@ -730,9 +742,7 @@ function Egitor(){
       r= this.findCharTypeRight( c );
     }
 
-    if( this.selection ) {
-      this.selection.destroy();
-    }
+    this.unselect();
 
     // Beginn new selection
     this.selection= new Selection( this, l- this.curChar );
@@ -750,7 +760,7 @@ function Egitor(){
     if( !infront ) {
       this.movePrevious();
       if( p !== -1 ) {
-        this.move( this.curLine.number, p );
+        this._move( this.curLine.number, p );
       }
     }
   }
@@ -777,7 +787,7 @@ function Egitor(){
 
     // Move to line above if the deleted one was the last
     let n= this.curLine.number;
-    this.move( n < lines.length ? n : n-1, 0 );
+    this._move( n < lines.length ? n : n-1, 0 );
   }
 
   Cursor.prototype.copyCurrent= function() {
@@ -801,9 +811,7 @@ function Egitor(){
   }
 
   Cursor.prototype.selectAll= function() {
-    if( this.selection ) {
-      this.selection.destroy();
-    }
+    this.unselect();
 
     const lines= currentContext.lines;
     this.selection= new Selection( lines[0] );
@@ -857,13 +865,12 @@ function Egitor(){
         new Line( this.curLine.number+ i, lines[i], false );
       }
 
-      this.selection.destroy();
-      this.selection= null;
+      this.unselect()
 
     } else {
       // Just insert at current position
       if( lines.length === 1 ) {
-        this.writeCharacter( lines[0] );
+        this._writeCharacter( lines[0] );
         return;
       }
 
@@ -885,7 +892,7 @@ function Egitor(){
     this.curLine.updateLineNumbers();
 
     // Set new cursor position
-    this.move( line.number, lastLine.length );
+    this._move( line.number, lastLine.length );
   }
 
   Cursor.prototype.duplicateSelection= function() {
@@ -931,6 +938,13 @@ function Egitor(){
       if( n < m-1 ) {
         this.curLine.setPosition( n+1 );
       }
+    }
+  }
+
+  Cursor.prototype.unselect= function() {
+    if( this.selection ) {
+      this.selection.destroy();
+      this.selection= null;
     }
   }
 
@@ -1456,6 +1470,262 @@ function Egitor(){
     return 0;
   }
 
+  function ActionBase( c ) {
+    this.lineNum= c.curLine.number;
+    this.charCol= c.curChar;
+    this.time= Date.now();
+  }
+
+  ActionBase.prototype.isSameType= function( x ) {
+    return this.getType() === x.getType();
+  }
+
+  ActionBase.prototype.checkTime= function() {
+    const t= Date.now();
+    if( (t- this.time) > ActionBase.maxTime ) {
+      return false;
+    }
+
+    // Update time for the next comparison
+    this.time= t;
+    return true;
+  }
+
+  ActionBase.prototype.checkAttach= function( ac ) {
+    // Consume cursor move actions and set the timestamp low enough
+    // so that the next add word action will create a new element on the stack
+    if( ac.isConsumable() ) {
+      this.time= 0;
+      return 0x2; // Return true
+    }
+
+    // Event types are different
+    if( !this.isSameType( ac ) ) {
+      return 0x1; // Return false
+    }
+
+    // Too much time has passed since the last event
+    if( !this.checkTime() ) {
+      return 0x1;
+    }
+
+    return 0; // Don't return
+  }
+
+  ActionBase.prototype.isConsumable= function() {
+    return false;
+  }
+
+  ActionBase.prototype._abstractMethod= function() {
+    throw Error('Abstract method missing implementation');
+  }
+
+  ActionBase.prototype.getType=      function() { this._abstractMethod(); }
+  ActionBase.prototype.attach=       function() { this._abstractMethod(); }
+  ActionBase.prototype.undoAction=   function() { this._abstractMethod(); }
+  ActionBase.prototype.redoAction=   function() { this._abstractMethod(); }
+
+  // Maximum amount of time that may pass before actions are treated separately
+  ActionBase.maxTime= 250;
+
+  ActionBase.Types= {
+    AddLine: 0,
+    RemoveLine: 1,
+    AddWord: 2,
+    RemoveWord: 3,
+    InsertText: 4,
+    RemoveText: 5,
+    CursorMove: 6
+  };
+
+
+  function CursorMoveAction() {}
+  Object.setPrototypeOf( CursorMoveAction.prototype, ActionBase.prototype );
+
+  CursorMoveAction.prototype.getType= function() {
+    return ActionBase.Types.CursorMove;
+  }
+
+  CursorMoveAction.prototype.isConsumable= function() {
+    return true;
+  }
+
+  CursorMoveAction.instance= new CursorMoveAction();
+  CursorMoveAction.get= function() { console.log('move action'); return CursorMoveAction.instance; }
+
+
+  function AddWordAction( cursor, t ) {
+    ActionBase.call( this, cursor );
+
+    this.text= t;
+  }
+  Object.setPrototypeOf( AddWordAction.prototype, ActionBase.prototype );
+
+  AddWordAction.prototype.getType= function() {
+    return ActionBase.Types.AddWord;
+  }
+
+  AddWordAction.prototype.attach= function( ac ) {
+    let v= this.checkAttach( ac );
+    if( v ) {
+      return v & 0x2;
+    }
+
+    if( this.text.length ) {
+      const end= toCharType(this.text.charAt( this.text.length-1 ));
+      const inp= toCharType( ac.text.charAt(0) );
+
+      // Trailing whitespace behind the current word is also added to the action
+      if( (end !== inp) && (end !== CharType.None) && (inp !== CharType.Whitespace) ) {
+        return false;
+      }
+    }
+
+    this.text+= ac.text;
+    return true;
+  }
+
+  AddWordAction.prototype.undoAction= function() {
+    // Remove text section from the string
+    const c= currentContext.cursor;
+    c.unselect();
+    const b= this.charCol;
+    currentContext.lines[ this.lineNum ].removeTextSection( b, b+ this.text.length );
+    c._move( this.lineNum, b );
+  }
+
+  AddWordAction.prototype.redoAction= function() {
+    // Insert characters at their previous position
+    const c= currentContext.cursor;
+    c.move( this.lineNum, this.charCol );
+    c._writeCharacter( this.text );
+  }
+
+
+  function AddLineAction( cursor ) {
+    ActionBase.call( this, cursor );
+
+    this.lines= 1;
+  }
+  Object.setPrototypeOf( AddLineAction.prototype, ActionBase.prototype );
+
+  AddLineAction.prototype.getType= function() {
+    return ActionBase.Types.AddLine;
+  }
+
+  AddLineAction.prototype.attach= function( ac ) {
+    let v= this.checkAttach( ac );
+    if( v ) {
+      return v & 0x2;
+    }
+
+    this.lines++;
+    return true;
+  }
+
+  AddLineAction.prototype.undoAction= function() {
+    const c= currentContext.cursor;
+    c.unselect();
+
+    // Remove any lines except the last one
+    for( let i= 1; i< this.lines; i++ ) {
+      const l= currentContext.lines[ this.lineNum+1 ];
+      l.setNumber( this.lineNum+ 1, false );
+      l.destroy( false );
+    }
+
+    // Remove last line by deleting NL char
+    // Merges both lines
+    c._move( this.lineNum+ 1, 0 );
+    c.curLine.setNumber( this.lineNum+ 1, false );
+    c.removeCharacter( false );
+  }
+
+  AddLineAction.prototype.redoAction= function() {
+    const c= currentContext.cursor;
+    c.unselect();
+    c._move( this.lineNum, this.charCol );
+
+    // Add all lines back into the document
+    for( let i= 0; i!= this.lines; i++ ) {
+      c._newLine( false );
+    }
+
+    // Update line numbers
+    currentContext.lines[ this.lineNum ].updateLineNumbers();
+  }
+
+
+  function ActionStack( l= 0 ) {
+    this.arr= [];
+    this.pos= 0;  // Points to the next free cell / next action to redo
+    this.maxLength= l;
+  }
+
+  ActionStack.prototype.moveBack= function() {
+    // Reached the begin of the history
+    if( !this.pos ) {
+      return false;
+    }
+
+    return this.arr[ --this.pos ];
+  }
+
+  ActionStack.prototype.moveForward= function() {
+    // Reached top of action stack
+    if( this.pos === this.arr.length ) {
+      return false;
+    }
+
+    return this.arr[ this.pos++ ];
+  }
+
+  ActionStack.prototype.push= function( action ) {
+    // Dimiss actions infront of the current position in the history
+    this.arr.splice( this.pos, this.arr.length- this.pos );
+
+    // Restrict the size of the history by dismissing the oldest action
+    if( this.maxLength && (is.pos === this.maxLength) ) {
+      this.arr.shift();
+    } else {
+      this.pos++;
+    }
+
+    this.arr.push( action );
+  }
+
+  ActionStack.prototype.get= function() {
+    return this.pos ? this.arr[ this.pos-1 ] : null;
+  }
+
+  ActionStack.prototype.back= function() {
+    const a= this.moveBack();
+    if( a ) {
+      a.undoAction();
+    }
+  }
+
+  ActionStack.prototype.forward= function() {
+    const a= this.moveForward();
+    if( a ) {
+      a.redoAction();
+    }
+  }
+
+  ActionStack.prototype.event= function( action ) {
+    let cur= this.get();
+    if( cur ) {
+      if( !cur.attach( action ) ) {
+        this.push( action );
+      }
+    } else {
+      if( !action.isConsumable() ) {
+        this.push( action );
+      }
+    }
+    console.log( this.arr.length );
+  }
+
   function CursorAnimator( c ) {
     this.speed= 600;
 
@@ -1585,6 +1855,9 @@ function Egitor(){
 
     this.lines= [];
 
+    const actions= new ActionStack();
+    this.actions= actions;
+
     const cursor= new Cursor();
     this.cursor= cursor;
     cursor.setListener('move', () => { this._updateScrollPosition(); });
@@ -1639,6 +1912,16 @@ function Egitor(){
             case 'a':
             case 'A':
               cursor.selectAll();
+              break;
+
+            case 'z':
+            case 'Z':
+              actions.back();
+              break;
+
+            case 'y':
+            case 'Y':
+              actions.forward();
               break;
           }
         }
