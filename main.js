@@ -1,7 +1,9 @@
 function Egitor(){
   'use strict';
 
+  /** Create a CSS class with a name and set of rules **/
   const createCSSClass= (function() {
+    // Create style element in the head
     const styleElement= document.createElement('style');
     styleElement.type = 'text/css';
     document.getElementsByTagName('head')[0].appendChild( styleElement );
@@ -17,15 +19,18 @@ function Egitor(){
     }
   })();
 
+  /** Insert string into another string at position **/
   function insert( a, b, pos ) {
    return [a.slice(0, pos), b, a.slice(pos)].join('');
   }
 
+  /** Remove a either a single character or a section from a string **/
   function extract( str, pos, end= -1 ) {
     end= end < 0 ? pos+1 : end;
     return str.slice(0, pos) + str.slice(end);
   }
 
+  /** Clamp a number to a maximum and minimum **/
   function clamp( v, min, max ) {
     if( v < min ) {
       return min;
@@ -36,10 +41,12 @@ function Egitor(){
     return v;
   }
 
+  /** Check whether a number is inside bounds **/
   function isInRange( x, min, max ) {
     return x>min && x<max;
   }
 
+  /** Wrap a callback to restrict call frequency to the frame rate **/
   function debounce( fn ) {
     let deb= true;
     return function() {
@@ -54,15 +61,25 @@ function Egitor(){
     }
   }
 
+  /** Copy an elements client width to another elements style **/
   function copyElementWidth( from, to, off= 0 ) {
     to.style.width=  ''+ (off+ from.scrollWidth)+ 'px';
   }
 
+  /** Copy an elements scroll position to another one **/
   function copyElementScroll( from, to ) {
     to.scrollTop= from.scrollTop;
     to.scrollLeft= from.scrollLeft;
   }
 
+  /** Delete all of an elements children **/
+  function deleteAllChildren( node ) {
+    while( node.firstChild ) {
+      node.removeChild( node.firstChild );
+    }
+  }
+
+  /** Check whether a character is a letter **/
   const isLetter= (function() {
     const re= /(\d|[A-Za-z_ÁÀȦÂÄǞǍĂĀÃÅǺǼǢĆĊĈČĎḌḐḒÉÈĖÊËĚĔĒẼE̊ẸǴĠĜǦĞG̃ĢĤḤáàȧâäǟǎăāãåǻǽǣćċĉčďḍḑḓéèėêëěĕēẽe̊ẹǵġĝǧğg̃ģĥḥÍÌİÎÏǏĬĪĨỊĴĶǨĹĻĽĿḼM̂M̄ʼNŃN̂ṄN̈ŇN̄ÑŅṊÓÒȮȰÔÖȪǑŎŌÕȬŐỌǾƠíìiîïǐĭīĩịĵķǩĺļľŀḽm̂m̄ŉńn̂ṅn̈ňn̄ñņṋóòôȯȱöȫǒŏōõȭőọǿơP̄ŔŘŖŚŜṠŠȘṢŤȚṬṰÚÙÛÜǓŬŪŨŰŮỤẂẀŴẄÝỲŶŸȲỸŹŻŽẒǮp̄ŕřŗśŝṡšşṣťțṭṱúùûüǔŭūũűůụẃẁŵẅýỳŷÿȳỹźżžẓǯßœŒçÇ])/;
     return function( s ) {
@@ -70,6 +87,7 @@ function Egitor(){
     }
   })();
 
+  /** Check whether a character is a symbol **/
   const isWhitespace= (function() {
     const re= /\s/;
     return function( s ) {
@@ -78,6 +96,10 @@ function Egitor(){
   })();
 
 
+  /**
+  * Simple 2D vector class
+  * Has a X and Y component and some simple vector calculations
+  **/
   function Vector( x, y ) {
     this.set(x, y);
   }
@@ -114,7 +136,10 @@ function Egitor(){
     return Math.sprt( this.x ** 2+ this.y ** 2 );
   }
 
-  // Sorted by priority: Letter > Symbol > WS
+  /**
+  * Character type enum
+  * Sorted by priority: Letter > Symbol > WS
+  **/
   const CharType= {
     None: -1,
     Whitespace: 0,
@@ -122,6 +147,7 @@ function Egitor(){
     Letter: 2
   };
 
+  /** Convert a character to an char type enum **/
   function toCharType( c= null ) {
     if( c === null || !c.length ) {
       return CharType.None;
@@ -135,14 +161,13 @@ function Egitor(){
     return CharType.Symbol;
   }
 
-  function deleteAllChildren( node ) {
-    while( node.firstChild ) {
-      node.removeChild( node.firstChild );
-    }
-  }
-
   let currentContext= null;
 
+  /**
+  * Editor Text Styling class
+  * Defines text styles
+  * Features: color, bold, italic, underline
+  **/
   function Styling( name, color, bold, italic, underline ) {
     this.name= name;
     this._id= (Styling.staticCounter++);
@@ -177,10 +202,14 @@ function Egitor(){
   const defStyles= [
     new Styling( 'text' ),
     new Styling( 'keyword', 'blue', true ),
-    new Styling( 'string', 'green' )
+    new Styling( 'string', 'green' ),
+    new Styling( 'comment', 'grey', false, true )
   ];
 
-
+  /**
+  * Style Entry class
+  * Stores begin and end of a text section and its style
+  **/
   function StyleEntry( s, e, t= null ) {
     this.start= s;
     this.end= e;
@@ -198,6 +227,11 @@ function Egitor(){
   }
 
 
+  /**
+  * Text Selection class
+  * Stores line and column positions to the begin and end of a text selection
+  * in the editor. Allows for iteration over selected line (sections)
+  **/
   function Selection( c, p ) {
     // Check if position offset was provided
     let o= (typeof p === 'undefined') ? 0 : p;
@@ -386,6 +420,12 @@ function Egitor(){
   }
 
 
+  /**
+  * Cursor class
+  * Main interface to modify the document
+  * Mostly corresponds directly to the functionalities provided by
+  * keyboard shortcuts for movement, adding and removing text
+  **/
   function Cursor() {
   	this.curLine= null;
     this.curChar= 0;
@@ -395,6 +435,7 @@ function Egitor(){
 
     this.onMove= null;
 
+    // Automatically insert new line as the document is empty
     this._newLine();
   }
 
@@ -949,6 +990,13 @@ function Egitor(){
   }
 
 
+  /**
+  * Line class
+  * A line in the document: Has text, styling and HTML elements
+  * Provides an interface to the cursor to deal with its content
+  * Any DOM changes like showing/hiding the cursor or selections are done
+  * by the object itself
+  **/
   function Line( pos= 0, content= null, updateLines= true ) {
   	this.number= pos;
     this.text= '';
@@ -1470,6 +1518,14 @@ function Egitor(){
     return 0;
   }
 
+
+  /**
+  * Abstract base class for any actions
+  * Provides some common functionalities and throws if
+  * abstract methods are called. Actions that happen shortly after each other
+  * are grouped together if possible, so that they can be un/redone in a single
+  * command. If the cursor moves inbetween the events a new action is created.
+  **/
   function ActionBase( c ) {
     this.lineNum= c.curLine.number;
     this.charCol= c.curChar;
@@ -1528,6 +1584,7 @@ function Egitor(){
   // Maximum amount of time that may pass before actions are treated separately
   ActionBase.maxTime= 250;
 
+  // Action type enum
   ActionBase.Types= {
     AddLine: 0,
     RemoveLine: 1,
@@ -1539,6 +1596,15 @@ function Egitor(){
   };
 
 
+  /**
+  * Singleton Cursor Move Action class
+  * Dummy class to notify the action on top of the action stack that the
+  * cursor has moved when the 'attach' is called. Does not enforce singelton
+  * behaviour in the constructor but provides a reusable static instance, as
+  * it stores no data or state and can be shared. Does not fully derive from
+  * ActionBase class as it only has its interface (prototype) but does not
+  * call the ActionBase constructor
+  **/
   function CursorMoveAction() {}
   Object.setPrototypeOf( CursorMoveAction.prototype, ActionBase.prototype );
 
@@ -1554,6 +1620,11 @@ function Egitor(){
   CursorMoveAction.get= function() { console.log('move action'); return CursorMoveAction.instance; }
 
 
+  /**
+  * Add Word Action class
+  * Stores a single words added to the document including trailing whitespace.
+  * If a letter or symbol follows the whitespace a new action is created.
+  **/
   function AddWordAction( cursor, t ) {
     ActionBase.call( this, cursor );
 
@@ -1602,6 +1673,10 @@ function Egitor(){
   }
 
 
+  /**
+  * Add Line Action class
+  * Stores the number of empty lines added to the document.
+  **/
   function AddLineAction( cursor ) {
     ActionBase.call( this, cursor );
 
@@ -1656,6 +1731,14 @@ function Egitor(){
   }
 
 
+  /**
+  * Action Stack class
+  * Stores a history of actions modifing the document. Allows to move through
+  * the history by un/redoing the actions. By going 'back' and 'forward' in time
+  * the actions are executed but not discarded. If the stack was moved back to
+  * an earlier point in time and a new action is pushed to the stack, any actions
+  * that could have been redone are dimissed.
+  **/
   function ActionStack( l= 0 ) {
     this.arr= [];
     this.pos= 0;  // Points to the next free cell / next action to redo
@@ -1726,6 +1809,12 @@ function Egitor(){
     console.log( this.arr.length );
   }
 
+
+  /**
+  * Cursor Animator class
+  * Lets the cursor blink if the editor is focused. Keeps the cursor
+  * visible as long as new characters are typed.
+  **/
   function CursorAnimator( c ) {
     this.speed= 600;
 
@@ -1770,6 +1859,14 @@ function Egitor(){
     }, this.speed);
   }
 
+
+  /**
+  * Input Adapter class
+  * Provides an event source from the keyboard that also captures genuine
+  * copy/paste events that can access the clipboard. Creates a hidden textarea
+  * element that is focused. Converts clipboard events to keyboard events to
+  * allow for a simpler statemachine.
+  **/
   function InputAdapter( e ) {
     const t= document.createElement('textarea');
     this.element= t;
@@ -1843,6 +1940,13 @@ function Egitor(){
   const _PageUp= 33;
   const _PageDown= 34;
 
+  /**
+  * Editor class
+  * The actual editor instance used a context.
+  * Stores the document data and DOM elements. Inserts the HTML into a provided
+  * container element on creation. Does not automatically detect changes of its
+  * viewport.
+  **/
   function Editor( anchor ) {
     this.tabLength= 2;
     this.mousePos= new Vector();
