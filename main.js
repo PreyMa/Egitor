@@ -444,7 +444,11 @@ function Egitor(){
   }
 
   Cursor.prototype.isEOL= function() {
-    return (this.curChar >= this.curLine.text.length-1);
+    return (this.curChar > this.curLine.text.length-1);
+  }
+
+  Cursor.prototype.isBOL= function() {
+    return (this.curChar <= 0);
   }
 
   Cursor.prototype.isEOF= function() {
@@ -588,56 +592,64 @@ function Egitor(){
     this._move( l, c, s, k );
   }
 
-  Cursor.prototype.moveUp= function( select ) {
+  Cursor.prototype.switchMove= function( action, l, c, s, k ) {
+    if( action ) {
+      this.move( l, c, s, k );
+    } else {
+      this._move( l, c, s, k );
+    }
+  }
+
+  Cursor.prototype.moveUp= function( select, action= true ) {
     if( this.curLine.number ) {
-      this.move( this.curLine.number- 1, this.shadowPosition, select, true );
+      this.switchMove( action, this.curLine.number- 1, this.shadowPosition, select, true );
       return true;
     }
     return false;
   }
 
-  Cursor.prototype.moveDown= function( select ) {
+  Cursor.prototype.moveDown= function( select, action= true ) {
     const lines= currentContext.lines;
 
     if( this.curLine.number !== lines.length-1 ) {
-      this.move( this.curLine.number+ 1, this.shadowPosition, select, true );
+      this.switchMove( action, this.curLine.number+ 1, this.shadowPosition, select, true );
       return true;
     }
     return false;
   }
 
-  Cursor.prototype.movePrevious= function( select ) {
+  Cursor.prototype.movePrevious= function( select, action= true ) {
     if( this.curChar ) {
-      this.move( this.curLine.number, this.curChar-1, select )
+      this.switchMove( action, this.curLine.number, this.curChar-1, select )
     } else {
-      if( this.moveUp( select ) ) {
-        this.moveEnd( select );
+      if( this.moveUp( select, action ) ) {
+        this.moveEnd( select, action );
       }
     }
   }
 
-  Cursor.prototype.moveNext= function( select ) {
+  Cursor.prototype.moveNext= function( select, action= true ) {
     if( this.curChar !== this.curLine.text.length ) {
-      this.move( this.curLine.number, this.curChar+1, select )
+      this.switchMove( action, this.curLine.number, this.curChar+1, select )
     } else {
-      if( this.moveDown( select ) ) {
-        this.moveBegin( select );
+      if( this.moveDown( select, action ) ) {
+        this.moveBegin( select, action );
       }
     }
   }
 
-  Cursor.prototype.moveEnd= function( select ) {
+  Cursor.prototype.moveEnd= function( select, action= true ) {
     if( this.curChar !== this.curLine.text.length ) {
-      this.move( this.curLine.number, this.curLine.text.length, select );
+      this.switchMove( action, this.curLine.number, this.curLine.text.length, select );
     } else {
       this.shadowPosition= this.curChar;
     }
   }
 
-  Cursor.prototype.moveBegin= function( select ) {
+  Cursor.prototype.moveBegin= function( select, action= true ) {
     if( this.curChar ) {
       // Move to first char in line that is not whitespace
-      this.move( this.curLine.number, this.curLine.firstNonWSChar(), select );
+      this.switchMove( action, this.curLine.number, this.curLine.firstNonWSChar(), select );
     } else {
       this.shadowPosition= this.curChar;
     }
@@ -654,7 +666,7 @@ function Egitor(){
     do {
       this.moveNext( select );
       c= this.getCurChar();
-    } while( (letter === isLetter(c)) && !isWhitespace(c) && !this.isEOF() );
+    } while( (letter === isLetter(c)) && !isWhitespace(c) && !this.isEOL() );
   }
 
   Cursor.prototype.movePreviousWord= function( select ) {
@@ -665,7 +677,7 @@ function Egitor(){
 
     const letter= isLetter( this.getCurChar() );
     let c= this.getPrevChar();
-    while( (letter === isLetter(c)) && !isWhitespace(c) && !this.isBOF() ) {
+    while( (letter === isLetter(c)) && !isWhitespace(c) && !this.isBOL() ) {
       this.movePrevious( select );
       c= this.getPrevChar();
     }
@@ -742,6 +754,15 @@ function Egitor(){
     }
 
     s.set( this, false ); // Set selection, but hide it
+
+    // Either remove a line or a word as move-by-word stops at begin/end of line
+    // Invert 'infront' as the cursor moves here in the opposite direction
+    if( s.lineSpan() !== 1 ) {
+      currentContext.actions.event( new RemoveLineAction( this ) );
+    } else {
+      currentContext.actions.event( new RemoveWordAction( this, !infront, this.selectionToString( s ) ) );
+    }
+
     this.removeSelection( s );
   }
 
@@ -791,7 +812,7 @@ function Egitor(){
     this.move( this.curLine.number, r, true );
   }
 
-  Cursor.prototype.removeCharacter= function( infront ) {
+  Cursor.prototype._removeCharacter= function( infront ) {
     if( this.selection ) {
       return this.removeSelection();
     }
@@ -799,17 +820,46 @@ function Egitor(){
     let pos= infront ? this.curChar+ 1 : this.curChar;
     let p= this.curLine.removeCharacter( pos-1 );
     if( !infront ) {
-      this.movePrevious();
+      this.movePrevious( false, false );  // No selection and no action
       if( p !== -1 ) {
         this._move( this.curLine.number, p );
       }
     }
   }
 
-  Cursor.prototype.selectionToString= function() {
+  Cursor.prototype.removeCharacter= function( infront ) {
+    let emitLineAction= false;
+
+    // Remove selection action is emitted by 'this.removeSelection()'
+    if( !this.selection ) {
+      // check if something can be removed
+      if( !(this.isBOF() && !infront) && !(this.isEOF() && infront) ) {
+        // Remove line action
+        // KeyCodes.Backspace at begin of line or KeyCodes.Delete at end of line
+        if( (this.isBOL() && !infront) || (this.isEOL() && infront) ) {
+          emitLineAction= true;
+
+        // Remove word action
+        } else {
+          currentContext.actions.event( new RemoveWordAction( this, infront ) );
+        }
+      }
+    }
+
+    this._removeCharacter( infront );
+
+    // Line actions need the cursor position after the line has been removed
+    if( emitLineAction ) {
+      currentContext.actions.event( new RemoveLineAction( this ) );
+    }
+  }
+
+  Cursor.prototype.selectionToString= function( s= null ) {
+    s= s === null ? this.selection : s;
+
     let t= '';
-    const sp= this.selection.lineSpan();
-    this.selection.forEach( (l, b, e, i) => {
+    const sp= s.lineSpan();
+    s.forEach( (l, b, e, i) => {
       // Don't add a NL if its the last line
       t += l.getString( b, e, i+1 < sp );
     });
@@ -1568,6 +1618,11 @@ function Egitor(){
     return 0; // Don't return
   }
 
+  ActionBase.prototype.copyPosition= function( ac ) {
+    this.lineNum= ac.lineNum;
+    this.charCol= ac.charCol;
+  }
+
   ActionBase.prototype.isConsumable= function() {
     return false;
   }
@@ -1713,7 +1768,7 @@ function Egitor(){
     // Merges both lines
     c._move( this.lineNum+ 1, 0 );
     c.curLine.setNumber( this.lineNum+ 1, false );
-    c.removeCharacter( false );
+    c._removeCharacter( false );
   }
 
   AddLineAction.prototype.redoAction= function() {
@@ -1730,6 +1785,117 @@ function Egitor(){
     currentContext.lines[ this.lineNum ].updateLineNumbers();
   }
 
+
+  /**
+  * Remove Word Action class
+  * Stores a removed word including its trailing whitespace
+  **/
+  function RemoveWordAction( cursor, front, txt= null ) {
+    ActionBase.call( this, cursor );
+
+    this.text= '';
+    this.front= front;
+
+    if( txt === null ) {
+      txt= front ? cursor.getCurChar() : cursor.getPrevChar();
+    }
+    this.addText( txt );
+  }
+  Object.setPrototypeOf( RemoveWordAction.prototype, ActionBase.prototype );
+
+  RemoveWordAction.prototype.getType= function() {
+    return ActionBase.Types.RemoveWord;
+  }
+
+  RemoveWordAction.prototype.addText= function( txt ) {
+    // Save the removed text
+    if( this.front ) {
+      this.text += txt;
+
+    // If the cursor removed a bit of text behind it, adjust its position
+    } else {
+      this.charCol -= txt.length;
+      this.text= txt+ this.text;
+    }
+  }
+
+  RemoveWordAction.prototype.getFirstChar= function() {
+    // Get the char that was removed first from the document
+    return this.front ? this.text.charAt(0) : this.text.charAt( this.text.length-1 );
+  }
+
+  RemoveWordAction.prototype.getLastChar= function() {
+    // Get the char that was removed most recently from the document
+    return !this.front ? this.text.charAt(0) : this.text.charAt( this.text.length-1 );
+  }
+
+  RemoveWordAction.prototype.attach= function( ac ) {
+    let v= this.checkAttach( ac );
+    if( v ) {
+      return v & 0x2;
+    }
+
+    if( this.front !== ac.front ) {
+      return false;
+    }
+
+    if( this.text.length ) {
+      const end= toCharType( this.getLastChar() );
+      const inp= toCharType( ac.getFirstChar() );
+
+      // Trailing whitespace behind the current word is also added to the action
+      if( (end !== inp) && (end !== CharType.None) && (inp === CharType.Whitespace) ) {
+        return false;
+      }
+    }
+
+    this.addText( ac.text );
+    return true;
+  }
+
+  RemoveWordAction.prototype.undoAction= function() {
+    AddWordAction.prototype.redoAction.call( this );
+  }
+
+  RemoveWordAction.prototype.redoAction= function() {
+    AddWordAction.prototype.undoAction.call( this );
+  }
+
+
+  /**
+  * Remove Line Action class
+  * Stores the number of lines removed from the document
+  **/
+  function RemoveLineAction( cursor ) {
+    ActionBase.call( this, cursor );
+
+    this.lines= 1;
+  }
+  Object.setPrototypeOf( RemoveLineAction.prototype, ActionBase.prototype );
+
+  RemoveLineAction.prototype.getType= function() {
+    return ActionBase.Types.RemoveLine;
+  }
+
+  RemoveLineAction.prototype.attach= function( ac ) {
+    let v= this.checkAttach( ac );
+    if( v ) {
+      return v & 0x2;
+    }
+
+    // Save position where insert lines on undo
+    this.copyPosition( ac );
+    this.lines+= ac.lines;
+    return true;
+  }
+
+  RemoveLineAction.prototype.undoAction= function() {
+    AddLineAction.prototype.redoAction.call( this );
+  }
+
+  RemoveLineAction.prototype.redoAction= function() {
+    AddLineAction.prototype.undoAction.call( this );
+  }
 
   /**
   * Action Stack class
