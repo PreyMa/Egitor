@@ -254,6 +254,11 @@ function Egitor(){
     this.endChar= -1;
   }
 
+  Selection.prototype.isBottomToTop= function() {
+    return (this.endChar < this.beginChar && this.endLine === this.beginLine) ||
+           (this.endLine.number < this.beginLine.number);
+  }
+
   Selection.prototype.normalize= function() {
     let topLine= null;
     let topChar= 0;
@@ -261,8 +266,7 @@ function Egitor(){
     let bottomChar= 0;
 
     // Normalize the bing and end positions to top and bottom ones
-    if( (this.endChar < this.beginChar && this.endLine === this.beginLine) ||
-        (this.endLine.number < this.beginLine.number) ) {
+    if( this.isBottomToTop() ) {
       topLine= this.endLine;
       topChar= this.endChar;
       bottomLine= this.beginLine;
@@ -276,6 +280,14 @@ function Egitor(){
     }
 
     return { topLine, topChar, bottomLine, bottomChar };
+  }
+
+  Selection.prototype.getTopVector= function() {
+    if( this.isBottomToTop() ) {
+      return new Vector(this.endChar, this.endLine.number);
+    } else {
+      return new Vector(this.beginChar, this.beginLine.number);
+    }
   }
 
   Selection.prototype.lineSpan= function() {
@@ -400,6 +412,27 @@ function Egitor(){
       lines[i].setSelection( -1 );
     }
   }
+
+  Selection.prototype.toString= function() {
+    let t= '';
+    const sp= this.lineSpan();
+    this.forEach( (l, b, e, i) => {
+      // Don't add a NL if its the last line
+      t += l.getString( b, e, i+1 < sp );
+    });
+    return t;
+  }
+
+  Selection.prototype.toLines= function() {
+    const sp= this.lineSpan();
+    let a= new Array( sp );
+    this.forEach( (l, b, e, i) => {
+      // No NLs
+      a[i]= l.getString( b, e, false );
+    });
+    return a;
+  }
+
 
   function LineData( t, s, e ) {
       this.text= t || '';
@@ -737,6 +770,7 @@ function Egitor(){
     }
 
     // Remove the cursors current selection
+    currentContext.actions.event( new RemoveTextAction( this ) );
     this._removeSelection( this.selection );
     this.selection= null;
   }
@@ -857,14 +891,7 @@ function Egitor(){
   Cursor.prototype.selectionToString= function( s= null ) {
     s= s === null ? this.selection : s;
 
-    let t= '';
-    const sp= s.lineSpan();
-    s.forEach( (l, b, e, i) => {
-      // Don't add a NL if its the last line
-      t += l.getString( b, e, i+1 < sp );
-    });
-
-    return t;
+    return s.toString();
   }
 
   Cursor.prototype.removeCurrentLine= function() {
@@ -909,8 +936,7 @@ function Egitor(){
     this.moveEOF( true );
   }
 
-  Cursor.prototype.insertText= function( t ) {
-    const lines= t.replace(/\r/g, '').split('\n');
+  Cursor.prototype._insertText= function( lines ) {
     const lastLine= lines[lines.length-1];
 
     let line= null;
@@ -986,23 +1012,42 @@ function Egitor(){
     this._move( line.number, lastLine.length );
   }
 
+  Cursor.prototype.insertText= function( t ) {
+    // Convert text to array of lines
+    const lines= t.replace(/\r/g, '').split('\n');
+
+    currentContext.actions.event( new InsertTextAction( this, lines ) );
+    this._insertText( lines );
+  }
+
   Cursor.prototype.duplicateSelection= function() {
     // Requires a selection to be present
     if( !this.selection ) {
       return;
     }
 
+    // Save start position before selection moves down due to the
+    // inserted lines
+    let topLine= this.selection.getTopVector();
+    let lines= new Array( this.selection.lineSpan()+1 );
+
+    // Iterate through lines and duplicate them
     let first= null;
     this.selection.forEach((l, b, e, i) => {
       first= i ? first : l; // Save first line
 
       let d= l.copyData();
+      lines[i]= d.text;                      // Save line text
       new Line( first.number+ i, d, false ); // Don't update numbers yet
 
       // Jump over newly added line
       return Selection.DoubleIncrement;
     });
     first.updateLineNumbers();
+
+    // Add NL
+    lines[ lines.length-1 ]= '';
+    currentContext.actions.event( new InsertTextAction(topLine, lines, true) );
   }
 
   Cursor.prototype.duplicateLine= function() {
@@ -1013,6 +1058,7 @@ function Egitor(){
     // Create a copy of the current line data
     // and insert a new line above the current one
     let d= this.curLine.copyData();
+    currentContext.actions.event( new InsertTextAction(this, [d.text, ''], true) );
     new Line( this.curLine.number, d );
   }
 
@@ -1577,13 +1623,31 @@ function Egitor(){
   * command. If the cursor moves inbetween the events a new action is created.
   **/
   function ActionBase( c ) {
-    this.lineNum= c.curLine.number;
-    this.charCol= c.curChar;
+    // Either get the position from a vector or cursor object
+    if( c instanceof Vector ) {
+      this.lineNum= c.y;
+      this.charCol= c.x;
+
+    } else if( c instanceof Cursor ) {
+      this.lineNum= c.curLine.number;
+      this.charCol= c.curChar;
+
+    } else {
+      throw Error('Invalid argument');
+    }
+
+    // Safe initial creation time
     this.time= Date.now();
   }
 
   ActionBase.prototype.isSameType= function( x ) {
     return this.getType() === x.getType();
+  }
+
+  ActionBase.prototype.moveCursor= function() {
+    const c= currentContext.cursor;
+    c._move( this.lineNum, this.charCol );
+    return c;
   }
 
   ActionBase.prototype.checkTime= function() {
@@ -1722,8 +1786,7 @@ function Egitor(){
 
   AddWordAction.prototype.redoAction= function() {
     // Insert characters at their previous position
-    const c= currentContext.cursor;
-    c.move( this.lineNum, this.charCol );
+    const c= this.moveCursor();
     c._writeCharacter( this.text );
   }
 
@@ -1772,9 +1835,7 @@ function Egitor(){
   }
 
   AddLineAction.prototype.redoAction= function() {
-    const c= currentContext.cursor;
-    c.unselect();
-    c._move( this.lineNum, this.charCol );
+    const c= this.moveCursor();
 
     // Add all lines back into the document
     for( let i= 0; i!= this.lines; i++ ) {
@@ -1895,6 +1956,70 @@ function Egitor(){
 
   RemoveLineAction.prototype.redoAction= function() {
     AddLineAction.prototype.undoAction.call( this );
+  }
+
+
+  function InsertTextAction( cursor, lines, zeroCol= false ) {
+    ActionBase.call( this, cursor );
+
+    this.charCol= zeroCol ? 0 : this.charCol;
+    this.lines= lines;
+  }
+  Object.setPrototypeOf( InsertTextAction.prototype, ActionBase.prototype );
+
+  InsertTextAction.prototype.getType= function() {
+    return ActionBase.Types.InsertText;
+  }
+
+  InsertTextAction.prototype.attach= function( ac ) {
+    // Text actions are not attachable
+    return ac.isConsumable();
+  }
+
+  InsertTextAction.prototype.undoAction= function() {
+    // Create hidden selection
+    const c= this.moveCursor();
+    const s= new Selection( c );
+
+    // Offset the char position if the selection is only a single line one
+    const idx= this.lines.length-1;
+    const off= idx ? 0 : this.charCol;
+
+    // Move cursor and remove selection
+    c._move( this.lineNum+ idx, off+ this.lines[ idx ].length );
+    s.set( c, false );
+    c.removeSelection( s );
+  }
+
+  InsertTextAction.prototype.redoAction= function() {
+    const c= this.moveCursor();
+    c._insertText( this.lines );
+  }
+
+
+  function RemoveTextAction( cursor ) {
+    const sel= cursor.selection;
+
+    ActionBase.call( this, sel.getTopVector() );
+    this.lines= sel.toLines();
+  }
+  Object.setPrototypeOf( RemoveTextAction.prototype, ActionBase.prototype );
+
+  RemoveTextAction.prototype.getType= function() {
+    return ActionBase.Types.RemoveText;
+  }
+
+  RemoveTextAction.prototype.attach= function( ac ) {
+    // Text actions are not attachable
+    return ac.isConsumable();
+  }
+
+  RemoveTextAction.prototype.undoAction= function() {
+    InsertTextAction.prototype.redoAction.call( this );
+  }
+
+  RemoveTextAction.prototype.redoAction= function() {
+    InsertTextAction.prototype.undoAction.call( this );
   }
 
   /**
