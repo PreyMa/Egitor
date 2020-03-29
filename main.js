@@ -1616,6 +1616,17 @@ function Egitor(){
 
 
   /**
+  * Action Line Span class
+  * Simple Storage for events emitted by actions
+  **/
+  function ActionLineSpan( l, s= 1 ) {
+    this.lineNum= l;
+    this.span= s;
+    this.ctx= currentContext;
+  }
+
+
+  /**
   * Abstract base class for any actions
   * Provides some common functionalities and throws if
   * abstract methods are called. Actions that happen shortly after each other
@@ -1693,6 +1704,10 @@ function Egitor(){
 
   ActionBase.prototype._abstractMethod= function() {
     throw Error('Abstract method missing implementation');
+  }
+
+  ActionBase.prototype.emitEvent= function() {
+    return new ActionLineSpan( this.lineNum );
   }
 
   ActionBase.prototype.getType=      function() { this._abstractMethod(); }
@@ -1804,6 +1819,10 @@ function Egitor(){
 
   AddLineAction.prototype.getType= function() {
     return ActionBase.Types.AddLine;
+  }
+
+  AddLineAction.prototype.emitEvent= function() {
+    return new ActionLineSpan( this.lineNum, this.lines );
   }
 
   AddLineAction.prototype.attach= function( ac ) {
@@ -1938,6 +1957,10 @@ function Egitor(){
     return ActionBase.Types.RemoveLine;
   }
 
+  RemoveLineAction.prototype.emitEvent= function() {
+    return new ActionLineSpan( this.lineNum, this.lines );
+  }
+
   RemoveLineAction.prototype.attach= function( ac ) {
     let v= this.checkAttach( ac );
     if( v ) {
@@ -1959,6 +1982,11 @@ function Egitor(){
   }
 
 
+  /**
+  * Insert Text Action class
+  * Stores insertion position and data of lines added to the document
+  * Is used for selections, line duplication and copy/paste
+  **/
   function InsertTextAction( cursor, lines, zeroCol= false ) {
     ActionBase.call( this, cursor );
 
@@ -1969,6 +1997,10 @@ function Egitor(){
 
   InsertTextAction.prototype.getType= function() {
     return ActionBase.Types.InsertText;
+  }
+
+  InsertTextAction.prototype.emitEvent= function() {
+    return new ActionLineSpan( this.lineNum, this.lines.length );
   }
 
   InsertTextAction.prototype.attach= function( ac ) {
@@ -1997,6 +2029,10 @@ function Egitor(){
   }
 
 
+  /**
+  * Remove Text Action class
+  * Stores the original position and data of lines removed from the document
+  **/
   function RemoveTextAction( cursor ) {
     const sel= cursor.selection;
 
@@ -2007,6 +2043,10 @@ function Egitor(){
 
   RemoveTextAction.prototype.getType= function() {
     return ActionBase.Types.RemoveText;
+  }
+
+  RemoveTextAction.prototype.emitEvent= function() {
+    return new ActionLineSpan( this.lineNum, this.lines.length );
   }
 
   RemoveTextAction.prototype.attach= function( ac ) {
@@ -2022,6 +2062,7 @@ function Egitor(){
     InsertTextAction.prototype.undoAction.call( this );
   }
 
+
   /**
   * Action Stack class
   * Stores a history of actions modifing the document. Allows to move through
@@ -2034,6 +2075,7 @@ function Egitor(){
     this.arr= [];
     this.pos= 0;  // Points to the next free cell / next action to redo
     this.maxLength= l;
+    this.onActionPushed= null;
   }
 
   ActionStack.prototype.moveBack= function() {
@@ -2066,6 +2108,7 @@ function Egitor(){
     }
 
     this.arr.push( action );
+    this.onActionPushed ? this.onActionPushed( action ) :  0;
   }
 
   ActionStack.prototype.get= function() {
@@ -2098,6 +2141,73 @@ function Egitor(){
       }
     }
     console.log( this.arr.length );
+  }
+
+
+  /**
+  * Event Map class
+  * Saves all requested user callbacks by event type. They are internally
+  * stored additonally in a table to provide quick lookup by event-type-number
+  **/
+  function EventMap( enumHint, transform= null ) {
+    this.map= new Map();
+    this.table= [];
+
+    // Create all event buckets referenced by the map and the array
+    for( let k in enumHint ) {
+      // New bucket
+      let arr= [];
+      let idx= enumHint[k];
+
+      // Save the ref in the map; the key can be transformed if needed
+      this.map.set( transform ? transform( k ) : k, arr );
+
+      // Create enough empty cells in the table as the enum is iterated in an
+      // unsorted fashion
+      while( idx >= this.table.length ) {
+        this.table.push( null );
+      }
+
+      this.table[idx]= arr;
+    }
+  }
+
+  EventMap.prototype.addListener= function( nm, cb ) {
+    // If an event cell does not exist yet, create it
+    let a= this.map.get( nm );
+    if( !a ) {
+      a= [];
+      this.map.set( nm, a );
+      this.table.push( a );
+    }
+
+    // Save cb
+    a.push( cb );
+  }
+
+  EventMap.prototype.call= function( num, args ) {
+    this._broadcast( (num < this.table.length) ? this.table[num] : null, args );
+  }
+
+  EventMap.prototype.callByName= function( nm, args ) {
+    this._broadcast( this.map.get( nm ), args );
+  }
+
+  EventMap.prototype._broadcast= function( a, args ) {
+    // Silent error
+    if( !a || !a.length ) {
+      return;
+    }
+
+    // Only create heavy event objects by event emitter if we reach this place
+    args= args.emitEvent ? args.emitEvent() : args;
+
+    // Call the cb either by apply or as a function with a single argument
+    if( Array.isArray(args) ) {
+      a.forEach( cb => cb.apply(window, args) );
+    } else {
+      a.forEach( cb => cb( args ) );
+    }
   }
 
 
@@ -2242,6 +2352,23 @@ function Egitor(){
 
 
   /**
+  * Enum of user events emitted by the editor
+  **/
+  const EditorEvents= {
+    Focused: 0,
+    Unfocused: 1,
+    CursorSet: 2,
+    Type: 3,
+    Copy: 4,
+    Cut: 5,
+    Paste: 6,
+    Undo: 7,
+    Redo: 8,
+    LineAction: 9,
+    Scroll: 10
+  };
+
+  /**
   * Editor class
   * The actual editor instance used a context.
   * Stores the document data and DOM elements. Inserts the HTML into a provided
@@ -2253,6 +2380,16 @@ function Egitor(){
     this.mousePos= new Vector();
     this.mousePagePos= new Vector();
 
+    const emitter= new EventMap( EditorEvents, (nm) => nm.toLowerCase() );
+    this.emitter= emitter;
+
+    const actions= new ActionStack();
+    this.actions= actions;
+
+    actions.onActionPushed= ( ac ) => {
+      this.emitter.call( EditorEvents.LineAction, ac );
+    };
+
     this.focus();
 
     this._createDOM( anchor );
@@ -2260,12 +2397,13 @@ function Egitor(){
 
     this.lines= [];
 
-    const actions= new ActionStack();
-    this.actions= actions;
 
     const cursor= new Cursor();
     this.cursor= cursor;
-    cursor.setListener('move', () => { this._updateScrollPosition(); });
+    cursor.setListener('move', () => {
+      this._updateScrollPosition();
+      this.emitter.call( EditorEvents.CursorSet, this );
+    });
 
     this.anim= new CursorAnimator( cursor );
 
@@ -2288,22 +2426,26 @@ function Egitor(){
       if( e.key.length === 1 ) {
         if( !e.ctrlKey ) {
           cursor.writeCharacter( e.key );
+          emitter.call( EditorEvents.Type, {ctx: this, key: e.key} );
 
         } else {
           switch( e.key ) {
             case 'v':
             case 'V':
               cursor.insertText( v.replace('\t', this._getTabulator()) );
+              emitter.call( EditorEvents.Paste, {ctx: this, data: v} );
               break;
 
             case 'c':
             case 'C':
               input.toClipboard( cursor.copyCurrent() );
+              emitter.call( EditorEvents.Copy, this );
               break;
 
             case 'x':
             case 'X':
               input.toClipboard( cursor.cutCurrent() );
+              emitter.call( EditorEvents.Cut, this );
               break;
 
             case 'd':
@@ -2322,11 +2464,13 @@ function Egitor(){
             case 'z':
             case 'Z':
               actions.back();
+              emitter.call( EditorEvents.Undo, this );
               break;
 
             case 'y':
             case 'Y':
               actions.forward();
+              emitter.call( EditorEvents.Redo, this );
               break;
           }
         }
@@ -2372,6 +2516,8 @@ function Egitor(){
           case KeyCodes.Tabulator:
             cursor.writeCharacter( this._getTabulator() );
             e.preventDefault(); // Prevent unfocus via tab key
+
+            emitter.call( EditorEvents.Type, {ctx: this, key: e.key} );
             break;
 
           case KeyCodes.PageDown:
@@ -2486,6 +2632,8 @@ function Egitor(){
       copyElementScroll( ce, this.textElement.parentElement );
       copyElementScroll( ce, this.selectionElement.parentElement );
       copyElementScroll( ce, this.backElement );
+
+      this.emitter.call( EditorEvents.Scroll, this );
     }) );
 
     // Update viewport on scroll and window resize
@@ -2581,6 +2729,8 @@ function Egitor(){
       this.input.setFocus( false );
       this.anim.setFocus( false );
       currentContext= null;
+
+      this.emitter.call( EditorEvents.Unfocused, this );
     }
   }
 
@@ -2599,6 +2749,8 @@ function Egitor(){
       if( this._isConstruct ) {
         this.anim.setFocus( true );
       }
+
+      this.emitter.call( EditorEvents.Focused, this );
     }
 
     // Always set the input focus
@@ -2607,6 +2759,10 @@ function Egitor(){
     }
 
     return wasFocused;
+  }
+
+  Editor.prototype.addEventListener= function( nm, cb ) {
+    this.emitter.addListener( nm, cb );
   }
 
   Editor.prototype._getTabulator= function() {
