@@ -87,6 +87,14 @@ function Egitor(){
     }
   })();
 
+  /** Check whether a character is a digit **/
+  const isDigit= (function() {
+    const re= /\d/;
+    return function( s ) {
+      return s.match( re ) ? true : false;
+    }
+  })();
+
   /** Check whether a character is a symbol **/
   const isWhitespace= (function() {
     const re= /\s/;
@@ -94,6 +102,75 @@ function Egitor(){
       return s.match( re ) ? true : false;
     }
   })();
+
+
+  /**
+  * Simple String Iterator class
+  * Allows iterating over a string in forward and reverse direction
+  * Only supposed for reading as it keeps a copy (-on-write-reference?) to the
+  * string
+  **/
+  function StringIterator( s, p= 0 ) {
+    this.str= s;
+    this.pos= p;
+    this.type= CharType.None;
+  }
+
+  StringIterator.prototype.get= function( off= 0 ) {
+    return this.str.charAt( this.pos+ off );
+  }
+
+  StringIterator.prototype.isEnd= function() {
+    return this.pos >= this.str.length;
+  }
+
+  StringIterator.prototype.isBegin= function() {
+    return !this.pos ? true : false;
+  }
+
+  StringIterator.prototype.move= function( off ) {
+    this.pos+= off;
+    this.type= CharType.None;
+  }
+
+  StringIterator.prototype.next= function() {
+    if( !this.isEnd() ) {
+      this.move( 1 );
+    }
+    return this.isEnd();
+  }
+
+  StringIterator.prototype.prev= function() {
+    if( !this.isBegin() ) {
+      this.move( -1 );
+    }
+    return this.isBegin();
+  }
+
+  StringIterator.prototype.set= function( p= 0 ) {
+    this.pos= p;
+    return this;
+  }
+
+  StringIterator.prototype.setEnd= function() {
+    this.pos= this.str.length;
+    return this;
+  }
+
+  StringIterator.prototype.charType= function() {
+    if( this.type === CharType.None ) {
+      this.type= toCharType( this.get() );
+    }
+    return this.type;
+  }
+
+  StringIterator.prototype.peakForward= function() {
+    return this.isEnd() ? '' : this.get( 1 );
+  }
+
+  StringIterator.prototype.peakBack= function() {
+    return this.isBegin() ? '' : this.get( -1 );
+  }
 
 
   /**
@@ -521,8 +598,9 @@ function Egitor(){
         return this.curLine.text.charAt( this.curChar+ 1 );
       }
       // Jump to the next line
-      if( wrapLine && (this.curLine.number !== lines.length-1) ) {
-        return lines[ this.curLine.number+ 1 ].text.charAt( 0 );
+      let next= this.curLine.getNextSibling();
+      if( wrapLine && next ) {
+        return next.text.charAt( 0 );
       }
     }
     return '';
@@ -537,9 +615,9 @@ function Egitor(){
         return this.curLine.text.charAt( this.curChar- 1 );
       }
       // Jump to the next line
-      if( wrapLine && this.curLine.number ) {
-        const line= lines[ this.curLine.number- 1 ];
-        return line.text.charAt( line.text.length-1 );
+      let prev= this.curLine.getPreviousSibling();
+      if( wrapLine && prev ) {
+        return prev.text.charAt( prev.text.length-1 );
       }
     }
     return '';
@@ -801,20 +879,19 @@ function Egitor(){
   }
 
   Cursor.prototype.findCharTypeLeft= function( t ) {
-    let i= this.curChar;
-    while( (i > 0) && (toCharType(this.curLine.text.charAt(i-1)) === t) ) {
-      i--;
+    let it= this.curLine.textBegin().set( this.curChar );
+    while( !it.isBegin() && (toCharType(it.peakBack()) === t) ) {
+      it.prev();
     }
-    return i;
+    return it.pos;
   }
 
   Cursor.prototype.findCharTypeRight= function( t ) {
-    const str= this.curLine.text;
-    let i= this.curChar;
-    while( (i < str.length) && (toCharType(str.charAt(i)) === t) ) {
-      i++;
+    let it= this.curLine.textBegin().set( this.curChar );
+    while( !it.isEnd() && (it.charType() === t) ) {
+      it.next();
     }
-    return i;
+    return it.pos;
   }
 
   Cursor.prototype.selectNearestWord= function() {
@@ -1098,6 +1175,7 @@ function Egitor(){
     this.text= '';
     this.styling= [];
     this.displayCursor= false;
+    this.parserStorage= null;
 
     // Actual text layer
     let text= document.createElement('DIV');
@@ -1170,6 +1248,10 @@ function Egitor(){
     return (this.number === currentContext.lines.length-1);
   }
 
+  Line.prototype.textBegin= function() {
+    return new StringIterator( this.text );
+  }
+
   Line.prototype.selectLine= function( pos= 0 ) {
     // Select whole line
     this.setSelection( pos, -1 );
@@ -1202,6 +1284,29 @@ function Egitor(){
       c.children[0].innerHTML= ''.padStart( begin, ' ');
       c.children[1].innerHTML= ''.padStart( end-begin, ' ');
     }
+  }
+
+  Line.prototype.getStorage= function( type= null ) {
+    // Only init the storage with an actual object if a parser tries to use it
+    if( !this.parserStorage ) {
+      this.parserStorage= type ? new type() : {};
+    }
+
+    return this.parserStorage;
+  }
+
+  Line.prototype.getNextSibling= function() {
+    if( this.number < currentContext.lines.length ) {
+      return currentContext.lines[ this.number+1 ];
+    }
+    return null;
+  }
+
+  Line.prototype.getPreviousSibling= function() {
+    if( this.number ) {
+      return currentContext.lines[ this.number-1 ];
+    }
+    return null;
   }
 
   Line.prototype.getStyling= function( p ) {
@@ -1481,11 +1586,12 @@ function Egitor(){
     // Remove NL of previous line
     if( pos < 0 ) {
       // If not the first line
-      if( this.number ) {
-        let len= lines[ this.number- 1 ].text.length;
+      let prev= this.getPreviousSibling();
+      if( prev ) {
+        let len= prev.text.length;
 
         // Append the text of this line to the previous one
-        lines[ this.number- 1 ].append( this.getData() );
+        prev.append( this.getData() );
         this.destroy();
 
         // Request to set the cursor at the position of the previous lines original length
@@ -1494,11 +1600,11 @@ function Egitor(){
     // Remove NL of this line
     } else if( pos >= this.text.length ) {
       // If not the last line
-      if( this.number !== lines.length -1 ) {
+      let next= this.getNextSibling();
+      if( next ) {
         let len= this.text.length;
 
         // Append the text of the next line to this one and destroy the next line
-        let next= lines[ this.number+ 1 ];
         this.append( next.getData() );
         next.destroy();
 
@@ -1606,10 +1712,12 @@ function Egitor(){
 
   Line.prototype.firstNonWSChar= function() {
     // Get first char that is not whitespace
-    for( let i= 0; i!== this.text.length; i++ ) {
-      if( !isWhitespace( this.text.charAt(i) ) ) {
-        return i;
+    let it= this.textBegin();
+    while( !it.isEnd() ) {
+      if( it.charType() !== CharType.Whitespace ) {
+        return it.pos;
       }
+      it.next();
     }
     return 0;
   }
@@ -1623,6 +1731,12 @@ function Egitor(){
     this.lineNum= l;
     this.span= s;
     this.ctx= currentContext;
+  }
+
+  ActionLineSpan.prototype.forEach= function( cb ) {
+    for( let i= this.lineNum; i!= this.lineNum+ this.span; i++ ) {
+      cb( this.ctx.lines[i] );
+    }
   }
 
 
@@ -2767,6 +2881,92 @@ function Egitor(){
 
   Editor.prototype._getTabulator= function() {
     return ''.padStart( this.tabLength );
+  }
+
+
+
+  function TextToken() {
+
+  }
+
+
+  function TextParser( e ) {
+    this.editor= e;
+    this.editor.addEventListener('lineaction', ls => {
+      this.onLineAction( ls );
+    });
+  }
+
+  TextParser.prototype.loadWord= function( str, i, cb ) {
+    while( i !== str.length ) {
+      let c= str.charAt( i );
+
+    }
+  }
+
+  TextParser.prototype.forEachToken= function( ls, cb ) {
+    ls.forEach( line => {
+
+      let i= this.consumeLine( line );
+
+      let str= line.text;
+      while( i!= str.length ) {
+        let c= str.charAt( i );
+        let t= toCharType( c );
+
+        switch( t ) {
+          case CharType.Letter:
+            i= this.loadWord( str, i, cb );
+            break;
+
+          case CharType.Symbol:
+            break;
+
+          // Whitespace
+          default:
+            i++;
+            break;
+        }
+      }
+    });
+  }
+
+  TextParser.prototype._abstractMethod= function() {
+    throw Error('abstract method');
+  }
+
+  TextParser.prototype.onLineAction= function() { this._abstractMethod(); }
+  TextParser.prototype.consumeLine=  function() { this._abstractMethod(); }
+
+
+
+  function TextParserCStorage() {
+    this.endsWithComment= false;
+    this.endsWithStrLiteral= false;
+  }
+
+  function TextParserC( e ) {
+    TextParser.call( this, e );
+  }
+  Object.setPrototypeOf( TextParserC.prototype, TextParser.prototype );
+
+  TextParserC.prototype.consumeLine= function() {
+    let data= line.getStorage( ParserLineStorage );
+  }
+
+  TextParserC.prototype.onLineAction= function( ls ) {
+    this.forEachToken( ls, tk => {
+
+    });
+  }
+
+  TextParserC.prototype.isKeyword= function( w ) {
+    const kw= ['auto', 'double', 'int', 'struct', 'break', 'else', 'long',
+               'switch', 'case', 'enum', 'register', 'typedef', 'char',
+               'extern', 'return', 'union', 'continue', 'for', 'signed',
+               'void', 'do', 'if', 'static', 'while', 'default', 'goto',
+               'sizeof', 'volatile', 'const', 'float', 'short', 'unsigned'];
+    return
   }
 
   return Editor;
