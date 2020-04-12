@@ -172,6 +172,20 @@ function Egitor(){
     return this.isBegin() ? '' : this.get( -1 );
   }
 
+  StringIterator.prototype.follows= function( s ) {
+    // Check for valid args
+    if( !s || !s.length || !this.str.length ) {
+      return false;
+    }
+
+    // Reduce the number of calls to substr
+    if( this.get() !== s.charAt(0) ) {
+      return false;
+    }
+
+    return this.str.substr(this.pos, s.length) === s;
+  }
+
 
   /**
   * Simple 2D vector class
@@ -276,12 +290,13 @@ function Egitor(){
     return this._id === x._id;
   }
 
-  const defStyles= [
-    new Styling( 'text' ),
-    new Styling( 'keyword', 'blue', true ),
-    new Styling( 'string', 'green' ),
-    new Styling( 'comment', 'grey', false, true )
-  ];
+  const defStyles= {
+    Text:     new Styling( 'text' ),
+    Keyword:  new Styling( 'keyword',  'blue', true ),
+    String:   new Styling( 'string',   'green' ),
+    Comment:  new Styling( 'comment',  'grey', false, true ),
+    Constant: new Styling( 'constant', 'gold' )
+  };
 
   /**
   * Style Entry class
@@ -290,7 +305,7 @@ function Egitor(){
   function StyleEntry( s, e, t= null ) {
     this.start= s;
     this.end= e;
-    this.type= t ? t : defStyles[0];
+    this.type= t ? t : defStyles.Text;
   }
 
   StyleEntry.prototype.copy= function() {
@@ -1739,6 +1754,10 @@ function Egitor(){
     }
   }
 
+  ActionLineSpan.prototype.lastLine= function() {
+    return this.ctx.lines[ this.lineNum+ this.span- 1 ];
+  }
+
 
   /**
   * Abstract base class for any actions
@@ -1821,6 +1840,7 @@ function Egitor(){
   }
 
   ActionBase.prototype.emitEvent= function() {
+    // Emit an event with a span of one line by default
     return new ActionLineSpan( this.lineNum );
   }
 
@@ -1865,7 +1885,7 @@ function Egitor(){
   }
 
   CursorMoveAction.instance= new CursorMoveAction();
-  CursorMoveAction.get= function() { console.log('move action'); return CursorMoveAction.instance; }
+  CursorMoveAction.get= function() { return CursorMoveAction.instance; }
 
 
   /**
@@ -2184,12 +2204,16 @@ function Egitor(){
   * the actions are executed but not discarded. If the stack was moved back to
   * an earlier point in time and a new action is pushed to the stack, any actions
   * that could have been redone are dimissed.
+  * Whenever a line is changed a 'line-action' event is sent. It is either created
+  * when an action is pushed or the timeout of an action to attach to expires.
+  * Therefore attaching to an action does not trigger the event.
   **/
   function ActionStack( l= 0 ) {
     this.arr= [];
     this.pos= 0;  // Points to the next free cell / next action to redo
     this.maxLength= l;
     this.onActionPushed= null;
+    this.attachedEventTimer= null;
   }
 
   ActionStack.prototype.moveBack= function() {
@@ -2222,7 +2246,8 @@ function Egitor(){
     }
 
     this.arr.push( action );
-    this.onActionPushed ? this.onActionPushed( action ) :  0;
+    this._clearTimer();
+    this.onActionPushed ? this.onActionPushed( action, false ) :  0;
   }
 
   ActionStack.prototype.get= function() {
@@ -2230,6 +2255,7 @@ function Egitor(){
   }
 
   ActionStack.prototype.back= function() {
+    this._clearTimer();
     const a= this.moveBack();
     if( a ) {
       a.undoAction();
@@ -2237,6 +2263,7 @@ function Egitor(){
   }
 
   ActionStack.prototype.forward= function() {
+    this._clearTimer();
     const a= this.moveForward();
     if( a ) {
       a.redoAction();
@@ -2244,17 +2271,42 @@ function Egitor(){
   }
 
   ActionStack.prototype.event= function( action ) {
+    // Check if there is an old action to attach to
     let cur= this.get();
     if( cur ) {
+      // Try to attach
       if( !cur.attach( action ) ) {
         this.push( action );
+      } else {
+        // If the action was attached, but not consumed, set the timer
+        if( !action.isConsumable() ) {
+          this._setTimer( cur );
+        }
       }
     } else {
+      // Set the timer if its the first action (that is not consumable)
       if( !action.isConsumable() ) {
         this.push( action );
       }
     }
-    console.log( this.arr.length );
+  }
+
+  ActionStack.prototype._clearTimer= function() {
+    // Reset the timer if one currently exists
+    if( this.attachedEventTimer !== null ) {
+      window.clearTimeout( this.attachedEventTimer );
+      this.attachedEventTimer= null;
+    }
+  }
+
+  ActionStack.prototype._setTimer= function( action ) {
+    // Create a new timer that will send an event if an action surpasses the
+    // timeout to attach to it, triggering the parser if one is set
+    this._clearTimer();
+    this.attachedEventTimer= window.setTimeout( () => {
+      // Call with the 'timerbased'-flag set to true
+      this.onActionPushed ? this.onActionPushed( action, true ) : 0;
+    }, ActionBase.maxTime );
   }
 
 
@@ -2266,6 +2318,8 @@ function Egitor(){
   function EventMap( enumHint, transform= null ) {
     this.map= new Map();
     this.table= [];
+
+    this.queue= [];
 
     // Create all event buckets referenced by the map and the array
     for( let k in enumHint ) {
@@ -2305,6 +2359,15 @@ function Egitor(){
 
   EventMap.prototype.callByName= function( nm, args ) {
     this._broadcast( this.map.get( nm ), args );
+  }
+
+  EventMap.prototype.defer= function( n, a ) {
+    this.queue.push( {n, a} );
+  }
+
+  EventMap.prototype.execDefered= function() {
+    this.queue.forEach( d => typeof d.n === 'string' ? this.callByName(d.n, d.a) : this.call(d.n, d.a) );
+    this.queue= [];
   }
 
   EventMap.prototype._broadcast= function( a, args ) {
@@ -2500,8 +2563,14 @@ function Egitor(){
     const actions= new ActionStack();
     this.actions= actions;
 
-    actions.onActionPushed= ( ac ) => {
-      this.emitter.call( EditorEvents.LineAction, ac );
+    actions.onActionPushed= ( ac, timerBased ) => {
+      // Input based line actions need to be defered until the line data has
+      // actually changed
+      if( timerBased ) {
+        this.emitter.call( EditorEvents.LineAction, ac );
+      } else {
+        this.emitter.defer( EditorEvents.LineAction, ac );
+      }
     };
 
     this.focus();
@@ -2522,13 +2591,13 @@ function Egitor(){
     this.anim= new CursorAnimator( cursor );
 
     // TEST
-    this.lines[0].text= "Das ist ein langer String.";
+    /*this.lines[0].text= "Das ist ein langer String.";
     this.lines[0].addStyling( [new StyleEntry( 0,  4),
                                new StyleEntry( 4,  8),
                                new StyleEntry( 8, 12),
                                new StyleEntry(12, 19),
                                new StyleEntry(19, 26)
-                              ] );
+                             ] );*/
 
 
     const input= new InputAdapter( this.inputContainer );
@@ -2645,6 +2714,8 @@ function Egitor(){
       }
       this.anim.type();     // Pause the cursor blinking animation while typing
       this._updateWidths(); // Make all overlays as big as the text layer
+
+      emitter.execDefered();// Execute ayn defered events
     });
 
     this.viewport= null;
@@ -2654,6 +2725,9 @@ function Egitor(){
     // Initially ocus the editor
     this._isConstruct= true;
     this.focus();
+
+    // Test the CParser
+    let l= new TextParserC( this );
   }
 
   Editor.prototype._createDOM= function( anchor ) {
@@ -2884,89 +2958,427 @@ function Egitor(){
   }
 
 
+  /**
+  * Token Type enum
+  * Allows distinguishing different tokens
+  **/
+  const TokenType= {
+    Word: 0,
+    Operator: 1,
+    Compound: 2,
+    Keyword: 3
+  }
 
-  function TextToken() {
+  /**
+  * Text Token class
+  * Text snipped created by the parser containing a logical unit of the document
+  * Might be a word, operator keyword or a longer section called a compound token,
+  * based on the configuration of the parser. Instead of storing the actual string
+  * only the postions are stored.
+  **/
+  function TextToken( t, b, it, db= -1 ) {
+    this.type= t;
 
+    // Initialize with iterator only -> sets the end to -1
+    if( b instanceof StringIterator ) {
+      this.begin= b.pos;
+      this.end= -1;
+
+    // Initialize with numeric begin and iterator as end position
+    } else {
+      this.begin= b;
+      this.end= it.pos;
+    }
+    this.dataBegin= db;
+    this.comp= null;
+    this.style= null;
+  }
+
+  TextToken.prototype.getData= function( line ) {
+    // Empty/Open-ended token
+    if( this.end < 0 ) {
+      return '';
+    }
+
+    // Use 'databegin' if one is defined
+    return line.text.substring( this.dataBegin < 0 ? this.begin : this.dataBegin, this.end );
   }
 
 
-  function TextParser( e ) {
+  /**
+  * Text Styler class
+  * Simple helper class to build a line style array and submit it to a line.
+  * If multiple identical style classes are set next to each other, they are
+  * combinded to remove the need of DOM-element merging later on. If the line
+  * that styles are added to changes, the style array is automatically submitted.
+  **/
+  function TextStyler() {
+    this.arr= [];
+    this.line= null;
+  }
+
+  TextStyler.prototype.submit= function() {
+    if( !this.line || !this.arr.length ) {
+      return;
+    }
+
+    // Add styling to the line
+    this.line.addStyling( this.arr );
+    this.arr= [];
+    this.line= null;
+  }
+
+  TextStyler.prototype.add= function( line, tk, style ) {
+    if( this.line !== line ) {
+      this.submit();
+    }
+
+    // Add or combine
+    this.line= line;
+    let p= this.arr.length ? this.arr[this.arr.length-1] : null;
+    if(  p && p.type.equals( style ) ) {
+      p.end= tk.end;
+    } else {
+      this.arr.push( new StyleEntry( tk.begin, tk.end, style ) );
+    }
+  }
+
+
+  /**
+  * Simple Text Parser Storage class
+  * Provides the basic interface to the parser to store and reset. If the
+  * 'getStorageType' method is overridden, the new type has to inherit from this
+  * one.
+  **/
+  function TextParserStorage() {
+    this.endsWithCompound= null;    // Line ended with compound, else null
+    this.beginsWithCompound= null;  // Line started with compound, else null
+  }
+
+  TextParserStorage.prototype.reset= function() {
+    // Reset before parse iteration
+    this.endsWithCompound= null;
+    this.beginsWithCompound= null;
+  }
+
+
+  /**
+  * Compound Type class
+  * Defines a tpye of compound token. The start and end sequence which describe the
+  * begin and end of a token, the name and an escsape character can be set. If no
+  * end sequence is set, it will be identical to the start one. If no escape char
+  * exists, it should be set to null or ''. If compounds a certain copmound should
+  * end with the line, set the end sequence to '\n'.
+  **/
+  function CompoundType( n, es, b, e= null ) {
+    this.name= n;
+    this.beginSeq= b;
+    this.endSeq= e ? e : b;
+    this.escapeChar= es && (es.length > 0) ? es : null;
+
+    if( this.escapeChar && this.escapeChar.length !== 1 ) {
+      throw Error('Escape chars need to have a lenght of 1');
+    }
+  }
+
+  CompoundType.prototype.createToken= function( it ) {
+    const t= new TextToken( TokenType.Compound, it );
+    t.comp= this;
+    return t;
+  }
+
+  CompoundType.prototype.tryLoad= function( it, line, cb ) {
+    // Check if the compound start seq is found
+    if( it.follows( this.beginSeq ) ) {
+      let tk= this.createToken( it );
+
+      // Jump over start seq before load
+      it.move( this.beginSeq.length );
+      let ended= this.load( it, tk );
+
+      cb( line, tk );
+      return ended ? null : this;
+    }
+    return null;
+  }
+
+  CompoundType.prototype.load= function( it, tk ) {
+    if( this.endSeq === '\n' ) {
+      return this.loadWholeLine( it, tk );
+    }
+
+    while( !it.isEnd() ) {
+      // Jump over escape char
+      if( it.get() === this.escapeChar ) {
+        it.next();
+      } else {
+        // Try to find the end sequence
+        if( it.follows( this.endSeq ) ) {
+          it.move( this.endSeq.length );
+          tk.end= it.pos;
+          return true;
+        }
+      }
+      it.next();
+    }
+    tk.end= it.pos;
+    return false;
+  }
+
+  CompoundType.prototype.loadWholeLine= function( it, tk ) {
+    it.setEnd();
+    tk.end= it.pos;
+    return true;
+  }
+
+
+  /**
+  * Abstract Text Parser class
+  * Provides a set of functions to split line text data into tokens and iterate
+  * over them. Automatically attaches itself to the 'lineaction' event of a
+  * provided editor instance. Needs to have the onLineAction method overriden
+  **/
+  function TextParser( e, operators, compounds, keywords ) {
+    // Convert keywords to map if an array is provided
+    if( Array.isArray(keywords) ) {
+      this.keyMap= new Map();
+      keywords.forEach( w => this.keyMap.set(w, true) );
+    } else {
+      this.keyMap= keywords;
+    }
+
+    this.opList= operators.sort( (a,b) => b.length- a.length );
+    this.compList= compounds.sort( (a,b) => b.beginSeq.length- a.beginSeq.length );
     this.editor= e;
     this.editor.addEventListener('lineaction', ls => {
       this.onLineAction( ls );
     });
   }
 
-  TextParser.prototype.loadWord= function( str, i, cb ) {
-    while( i !== str.length ) {
-      let c= str.charAt( i );
+  TextParser.prototype.tagAsMultiCompound= function( line, comp ) {
+    const data= line.getStorage( this.getStorageType() );
+    data.endsWithCompound= comp ? comp : null;
+  }
 
+  TextParser.prototype.loadMultiLineCompund= function( it, line, cb ) {
+    // Try to get previous line
+    const prev= line.getPreviousSibling();
+    if( prev ) {
+      // Try to get compound entry from its data
+      const prevData= prev.getStorage( this.getStorageType() );
+      const comp= prevData.endsWithCompound;
+
+      // Save that the line started with a spilled over compound
+      const data= line.getStorage( this.getStorageType() );
+      data.beginsWithCompound= comp;
+
+      if( comp ) {
+        // Load the compound
+        let tk= comp.createToken( it );
+        let ended= comp.load( it, tk );
+        cb( line, tk );
+
+        if( !ended ) {
+          this.tagAsMultiCompound( line, comp );
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  TextParser.prototype.loadCompound= function( it, line, cb ) {
+    // Try loading one of the defined compounds
+    let comp= null;
+    this.compList.some( c => comp= c.tryLoad( it, line, cb ) );
+
+    // Compound spills to next line
+    if( comp ) {
+      this.tagAsMultiCompound( line, comp );
+    }
+
+    return comp ? true : false;
+  }
+
+  TextParser.prototype.loadCharType= function( it, tp ) {
+    // Move iterator until a different chartype is encountered
+    while( !it.isEnd() ) {
+      if( it.charType() !== tp ) {
+        return true;
+      }
+      it.next();
+    }
+    return false;
+  }
+
+  TextParser.prototype.loadWord= function( it, line, cb ) {
+    const begin= it.pos;
+
+    // Jump over preceding WS (eg. begin of the line)
+    this.loadCharType( it, CharType.Whitespace );
+    const wbegin= it.pos;
+
+    // Load the word itself
+    this.loadCharType( it, CharType.Letter );
+    const wend= it.pos;
+
+    // Jump over trailing WS
+    this.loadCharType( it, CharType.Whitespace );
+
+    // Check if word is keyword
+    if( wbegin !== wend ) {
+      if( this.keyMap.has( it.str.substring(wbegin, wend) ) ) {
+        return cb( line, new TextToken( TokenType.Keyword, begin, it, wbegin ) );
+      }
+    }
+
+    cb( line, new TextToken( TokenType.Word, begin, it ) );
+  }
+
+  TextParser.prototype.loadOperator= function( it, line, cb ) {
+    const begin= it.pos;
+
+    // Iterate over possible operators and try to match
+    let fnd= this.opList.some( o => {
+      if( it.follows(o) ) {
+        it.move( o.length );
+        cb( line, new TextToken( TokenType.Operator, begin, it ) );
+        return true;
+      }
+      return false;
+    });
+
+    // Create a word token, if the symbol cannot be converted to a operator
+    if( !fnd ) {
+      it.next();
+      cb( line, new TextToken( TokenType.Word, begin, it ) );
     }
   }
 
-  TextParser.prototype.forEachToken= function( ls, cb ) {
-    ls.forEach( line => {
+  TextParser.prototype.parseLine= function( line, cb ) {
+    line.getStorage( this.getStorageType() ).reset();
+    const it= line.textBegin();
 
-      let i= this.consumeLine( line );
+    // Load a multi line compound, that spilled over from the line above
+    this.loadMultiLineCompund( it, line, cb );
 
-      let str= line.text;
-      while( i!= str.length ) {
-        let c= str.charAt( i );
-        let t= toCharType( c );
+    while( !it.isEnd() ) {
+      if( !this.loadCompound( it, line, cb ) ) {
 
-        switch( t ) {
+        switch( it.charType() ) {
+          // Whitespace is attached to the word tokens
+          case CharType.Whitespace:
           case CharType.Letter:
-            i= this.loadWord( str, i, cb );
+            this.loadWord( it, line, cb );
             break;
 
+          // Symbols
           case CharType.Symbol:
+            this.loadOperator( it, line, cb );
             break;
 
           // Whitespace
           default:
-            i++;
+            it.next();
             break;
         }
       }
-    });
+    }
   }
+
+  TextParser.prototype.updateFollowingLines= function( ls, cb ) {
+    let tp= this.getStorageType();
+    let l= ls.lastLine();
+
+    // Go through all following lines, that begin with compound that is different to
+    // the one the current line ends with
+    while( l && l.getNextSibling() && (l.getStorage(tp).endsWithCompound !== l.getNextSibling().getStorage(tp).beginsWithCompound) ) {
+      l= l.getNextSibling();
+
+      this.parseLine( l, cb );
+    }
+  }
+
+  TextParser.prototype.forEachToken= function( ls, cb ) {
+    // Parse all lines in the line action span
+    ls.forEach( line => this.parseLine( line, cb ) );
+
+    // Parse all lines affected below
+    this.updateFollowingLines( ls, cb );
+  }
+
+  // Can be overriden by a parser implementation that needs to store additional data
+  // Returned type has to inherit from the default TextParserStorage class
+  TextParser.prototype.getStorageType= function() { return TextParserStorage; }
 
   TextParser.prototype._abstractMethod= function() {
     throw Error('abstract method');
   }
 
   TextParser.prototype.onLineAction= function() { this._abstractMethod(); }
-  TextParser.prototype.consumeLine=  function() { this._abstractMethod(); }
 
 
 
-  function TextParserCStorage() {
-    this.endsWithComment= false;
-    this.endsWithStrLiteral= false;
-  }
 
+  /**
+  * Text Parser implementation for the C language
+  **/
   function TextParserC( e ) {
-    TextParser.call( this, e );
+    // Define all keywords
+    this.keywords= [ 'auto', 'double', 'int', 'struct', 'break', 'else', 'long',
+                     'switch', 'case', 'enum', 'register', 'typedef', 'char',
+                     'extern', 'return', 'union', 'continue', 'for', 'signed',
+                     'void', 'do', 'if', 'static', 'while', 'default', 'goto',
+                     'sizeof', 'volatile', 'const', 'float', 'short', 'unsigned'];
+
+    // Define all compounds
+    this.compounds= [ new CompoundType('line-comment',  null, '//', '\n'),
+                      new CompoundType('block-comment', null, '/*', '*/'),
+                      new CompoundType('string',        '\\', '"'       ),
+                      new CompoundType('character',     '\\', '\''      ),
+                      new CompoundType('preprocessor',  null, '#',  '\n')
+                    ];
+
+    // Define all oprators
+    this.operators= ['<<=', '>>=', '+=', '-=', '*=', '/=', '%=', '<=', '>=',
+                     '!=', '==', '|=', '&=', '^=', '&&', '||', '<<', '>>', '++',
+                     '--', '~', '&', '|', '.', ',', ';', '?', '=', '(', ')', '{',
+                     '}', '[', ']', '+', '-', '*', '/', '%', '!', '^', '<', '>',
+                     ':'];
+
+    // Call parent constructor
+    TextParser.call( this, e, this.operators, this.compounds, this.keywords );
   }
   Object.setPrototypeOf( TextParserC.prototype, TextParser.prototype );
 
-  TextParserC.prototype.consumeLine= function() {
-    let data= line.getStorage( ParserLineStorage );
-  }
-
   TextParserC.prototype.onLineAction= function( ls ) {
-    this.forEachToken( ls, tk => {
+    let styler= new TextStyler();
 
+    // Get all tokens in the line span
+    this.forEachToken( ls, (l, tk) => {
+      switch( tk.type ) {
+        case TokenType.Word:
+        case TokenType.Operator:
+          // Number constants are colored differently
+          if( isDigit(tk.getData(l).charAt(0)) ) {
+            styler.add( l, tk, defStyles.Constant );
+          } else {
+            styler.add( l, tk, defStyles.Text );
+          }
+          break;
+
+        case TokenType.Keyword:
+          styler.add( l, tk, defStyles.Keyword );
+          break;
+
+        case TokenType.Compound:
+          styler.add( l, tk, defStyles.String );
+          break;
+      }
     });
-  }
 
-  TextParserC.prototype.isKeyword= function( w ) {
-    const kw= ['auto', 'double', 'int', 'struct', 'break', 'else', 'long',
-               'switch', 'case', 'enum', 'register', 'typedef', 'char',
-               'extern', 'return', 'union', 'continue', 'for', 'signed',
-               'void', 'do', 'if', 'static', 'while', 'default', 'goto',
-               'sizeof', 'volatile', 'const', 'float', 'short', 'unsigned'];
-    return
+    // Submit the last line manually
+    styler.submit();
   }
 
   return Editor;
