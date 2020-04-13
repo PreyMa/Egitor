@@ -315,8 +315,25 @@ function Egitor(){
 
   StyleEntry.prototype.createSection= function( text ) {
     const section= this.type.createElement();
-    section.innerHTML= text.substring( this.start, this.end );
+    this.writeText( section, text );
     return section;
+  }
+
+  StyleEntry.prototype.writeText= function( elem, text ) {
+    elem.innerText= text.substring( this.start, this.end );
+  }
+
+  StyleEntry.prototype.splitSection= function( section, pos ) {
+    const o= pos- this.start;
+    const inner= section.innerText;
+
+    const elem= this.type.createElement();
+    elem.innerText= inner.substring( o );
+
+    this.end= o;
+    this.writeText( section, inner );
+
+    return elem;
   }
 
 
@@ -1283,8 +1300,8 @@ function Egitor(){
     const c= this.selectionOverlayElement.children[1];
     // Remove selection
     if( begin < 0 ) {
-      c.children[0].innerHTML= '';
-      c.children[1].innerHTML= '';
+      c.children[0].innerText= '';
+      c.children[1].innerText= '';
       c.classList.remove( lineClass )
 
     // Create/Update selection
@@ -1297,8 +1314,8 @@ function Egitor(){
         c.classList.remove( lineClass );
       }
       // Set width of the selection elements
-      c.children[0].innerHTML= ''.padStart( begin, ' ');
-      c.children[1].innerHTML= ''.padStart( end-begin, ' ');
+      c.children[0].innerText= ''.padStart( begin, ' ');
+      c.children[1].innerText= ''.padStart( end-begin, ' ');
     }
   }
 
@@ -1340,7 +1357,7 @@ function Egitor(){
   Line.prototype.setNumber= function( n, upd= true ) {
   	this.number= n;
     if( upd ) {
-      this.textElement.children[0].innerHTML= (n+1);
+      this.textElement.children[0].innerText= (n+1);
     }
   }
 
@@ -1390,14 +1407,11 @@ function Egitor(){
       data.addStyle( s.copy() );
 
       // Duplicate the splitted section and split its inner html
-      let o= pos- s.start;
-      let inner= container.children[idx].innerHTML;
-      data.addElement( s.type.createElement() );
-      data.elements[0].innerHTML=        inner.substring( o );
-      container.children[idx].innerHTML= inner.substring( 0, o );
+      const e=  container.children[idx];
+      data.addElement( s.splitSection(e, pos ) );
 
-      s.end= pos;
-      data.styling[0].start+= o;
+      // Safe the offset the section positions have to be moved later
+      data.styling[0].start+= e.innerText.length;
 
       idx++;
     }
@@ -1444,7 +1458,7 @@ function Egitor(){
       // Merge neighbouring elements if they have the same type
       } else if( n && s.type.equals( n.type ) ) {
         s.end= n.end;
-        container.children[i].innerHTML= this.text.substring( s.start, s.end );
+        s.writeText( container.children[i], this.text );
 
         this.styling.splice( i+1, 1 );
         container.removeChild( container.children[i+1] );
@@ -1496,17 +1510,19 @@ function Egitor(){
   }
 
   Line.prototype.writeCharacter= function( pos, c ) {
-  	let t= insert( this.text, c, pos );
+  	const t= insert( this.text, c, pos );
     this.text= t;
 
-    let idx= this.getStyling( pos );
-    let elem= this.textElement.children[1].children[idx];
-  	t= insert( elem.innerHTML, c, pos- this.styling[idx].start );
+    // Get index and element
+    const idx= this.getStyling( pos );
+    const elem= this.textElement.children[1].children[idx];
+    const style= this.styling[idx];
+
     // Update the section length
-    this.styling[idx].end+= c.length;
+    style.end+= c.length;
     this.updateSectionPositions( idx+1, c.length );
 
-    elem.innerHTML= t;
+    style.writeText( elem, t );
   }
 
   Line.prototype.removeSectionByIndex= function( idx, update= true ) {
@@ -1576,8 +1592,8 @@ function Egitor(){
         // Clamp the relative end to the length and shrink the string
         relend= clamp( relend, 0, sectionLen );
         let len= relend- relpos;
-        t= extract( section.innerHTML, relpos, relend );
-        section.innerHTML= t;
+        t= extract( section.innerText, relpos, relend );
+        section.innerText= t;
 
         // Move the end by the number of deleted chars
         style.end-= len;
@@ -1687,21 +1703,21 @@ function Egitor(){
 
   Line.prototype.setCursor= function( col ) {
   	col= col<= this.text.length ? col : this.text.length;
-    this.cursorOverlayElement.children[1].innerHTML= '|'.padStart( col+1, ' ' );
+    this.cursorOverlayElement.children[1].innerText= '|'.padStart( col+1, ' ' );
     this.displayCursor= true;
     return col;
   }
 
   Line.prototype.hideCursor= function() {
   	if( this.displayCursor ) {
-    	this.cursorOverlayElement.children[1].innerHTML= this.cursorOverlayElement.children[1].innerHTML.slice(0, -1);
+    	this.cursorOverlayElement.children[1].innerText= this.cursorOverlayElement.children[1].innerHTML.slice(0, -1);
       this.displayCursor= false;
     }
   }
 
   Line.prototype.showCursor= function() {
   	if( !this.displayCursor ) {
-    	this.cursorOverlayElement.children[1].innerHTML+= '|';
+    	this.cursorOverlayElement.children[1].innerText+= '|';
       this.displayCursor= true;
     }
   }
@@ -2750,6 +2766,9 @@ function Egitor(){
 
     this.viewport= null;
     this.charDimensions= null;
+    this.spacerOffset= 0;
+    this.scrollTop= 0;
+    this.scrollLeft= 0;
     this.updateViewport();  // Initially get the size of the viewport
 
     // Initially ocus the editor
@@ -2848,6 +2867,9 @@ function Egitor(){
       copyElementScroll( ce, this.selectionElement.parentElement );
       copyElementScroll( ce, this.backElement );
 
+      this.scrollTop= ce.scrollTop;
+      this.scrollLeft= ce.scrollLeft;
+
       this.emitter.call( EditorEvents.Scroll, this );
     }) );
 
@@ -2907,26 +2929,26 @@ function Egitor(){
 
     // Bounding box values for the current cursor element
     // Calculate the pixel positons to avoid a call to getBoundingCLientRect
-    const top= num*height- ce.scrollTop+ rootRect.top;
+    const top= num*height- this.scrollTop+ rootRect.top;
     const bottom= top+ height;
-    const right= (col+1)*width- ce.scrollLeft+ rootRect.left+ this.spacerOffset;
+    const right= (col+1)*width- this.scrollLeft+ rootRect.left+ this.spacerOffset;
 
     // Cursor leaves bottom of the screen
     if( bottom > rootRect.bottom ) {
-      ce.scrollTop+= bottom- rootRect.bottom;
+      ce.scrollTop= (this.scrollTop+= bottom- rootRect.bottom);
 
     // Cursor leaves top of the screen
     } else if( top < rootRect.top ) {
-      ce.scrollTop-= rootRect.top- top;
+      ce.scrollTop= (this.scrollTop-= rootRect.top- top);
     }
 
     // Cursor leaves right of the screen
     if( right > rootRect.right ) {
-      ce.scrollLeft+= right- rootRect.right;
+      ce.scrollLeft= (this.scrollLeft+= right- rootRect.right);
 
     // Cursor leaves left of the screen
     }else if( right < rootRect.left ) {
-      ce.scrollLeft-= rootRect.left- right;
+      ce.scrollLeft= (this.scrollLeft-= rootRect.left- right);
     }
   }
 
