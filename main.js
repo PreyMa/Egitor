@@ -1196,21 +1196,21 @@ function Egitor(){
     // Actual text layer
     let text= document.createElement('DIV');
     text.classList.add('line');
-    text.innerHTML= '<div class="line-number"> '+ (pos+ 1)+ ' </div> <div class="line-text"></div><div class="line-tail line-text"></div>';
+    text.innerHTML= '<div class="line-number">'+ (pos+ 1)+ '</div><div class="line-text"></div><div class="line-tail line-text"></div>';
 
   	this.textElement= text;
 
     // Selection overlay
     let selection= document.createElement('DIV');
     selection.classList.add('overlay-line');
-    selection.innerHTML= '<div class="selection-overlay-spacer overlay-spacer"></div> <div class="overlay-text line-text"><span class="selection-spacer"></span><span class="selected"></span></div>';
+    selection.innerHTML= '<div class="selection-overlay-spacer overlay-spacer"></div><div class="overlay-text line-text"><span class="selection-spacer"></span><span class="selected"></span></div>';
 
     this.selectionOverlayElement= selection;
 
     // Cursor overlay
     let overlay= document.createElement('DIV');
     overlay.classList.add('overlay-line');
-    overlay.innerHTML= '<div class="overlay-spacer"></div> <div class="overlay-text line-text"></div>';
+    overlay.innerHTML= '<div class="overlay-spacer"></div><div class="overlay-text line-text"></div>';
 
     this.cursorOverlayElement= overlay;
 
@@ -1750,11 +1750,9 @@ function Egitor(){
   }
 
   ActionLineSpan.prototype.forEach= function( cb ) {
-    console.log( 'ls:', this.lineNum, this.span )
     for( let i= this.lineNum; i!= this.lineNum+ this.span; i++ ) {
       // Check if line exists in the document
       if( i >= this.ctx.lines.length ) {
-        console.log('break foreach');
         break;
       }
       cb( this.ctx.lines[i] );
@@ -2188,8 +2186,10 @@ function Egitor(){
   }
 
   RemoveTextAction.prototype.emitEvent= function() {
-    // Only send an request to update the one remaining line, as the other
-    // ones now don't exist
+    // On removing only the first line would need to be updated, but
+    // on undo requires the whole block to be reparsed. As emit event cannot
+    // distinguish between do, undo and redo always the whole block length is
+    // returned... possibly inefficient but simpler
     return new ActionLineSpan( this.lineNum, this.lines.length );
   }
 
@@ -2261,7 +2261,6 @@ function Egitor(){
 
     this.arr.push( action );
     this._clearTimer();
-    console.log('p:', action)
     this.doEvent( action );
   }
 
@@ -2321,8 +2320,6 @@ function Egitor(){
     // timeout to attach to it, triggering the parser if one is set
     this._clearTimer();
     this.attachedEventTimer= window.setTimeout( () => {
-      console.log('t:', action)
-
       // Call with the 'timerbased'-flag set to true
       this.doEvent( action, true );
     }, ActionBase.maxTime );
@@ -2765,12 +2762,12 @@ function Egitor(){
     deleteAllChildren( anchor );
 
     anchor.innerHTML= `<div class= "editor">
-      <div class="size-probe container"><div><div class="line"><div class="line-probe line-text">E</div></div></div></div>
+      <div class="size-probe container"><div><div class="line"><div class="line-probe line-text">Eg</div></div></div></div>
       <div class="background container">
         <div class="sidebar"><div class="filler"></div></div>
       </div>
       <div class="selection-overlay container"><div class="overlay-content"><div class="filler"></div></div></div>
-      <div class="text-field container" ><div class="overlay-content"><div class="filler"></div></div></div>
+      <div class="text-field container"><div class="overlay-content"><div class="filler"></div></div></div>
       <div class= "cursor-overlay container"><div class="overlay-content"><div class="filler"></div></div></div>
       <div class="input-container"></div>
     </div>`;
@@ -2872,7 +2869,7 @@ function Egitor(){
     const line= clamp( Math.floor( (y- pos.top+ ce.scrollTop) / char.height ), 0, this.lines.length-1 );
 
     // Calculate the column number: (pso inside the editor div + scroll) / width of character
-    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
+    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / (char.width/2) ));
 
     this.cursor.move( line, col, select );
   }
@@ -2884,7 +2881,7 @@ function Egitor(){
     let line= this.cursor.curLine.number;
     line= clamp( line+ (up ? -1 : 1), 0, this.lines.length-1 );
 
-    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / char.width ));
+    const col= Math.max(0, Math.round( (x- char.left+ ce.scrollLeft) / (char.width/2) ));
 
     this.cursor.move( line, col, select );
   }
@@ -2897,29 +2894,39 @@ function Egitor(){
   }
 
   Editor.prototype._updateScrollPosition= function() {
-    // Get bounding boxes for current overlay line and editor root element
-    const ovLine= this.cursor.curLine.cursorOverlayElement.children[1];
-    const lineRect= ovLine.getBoundingClientRect();
+    // Get elements
     const rootRect= this.viewport;
-
     const ce= this.cursorElement.parentElement;
 
+    // Get constants
+    // Text size probe ontains two chars to account for the spacing inbetween chars
+    const width= this.charDimensions.width/2;
+    const height= this.charDimensions.height;
+    const num= this.cursor.curLine.number;
+    const col= this.cursor.curChar;
+
+    // Bounding box values for the current cursor element
+    // Calculate the pixel positons to avoid a call to getBoundingCLientRect
+    const top= num*height- ce.scrollTop+ rootRect.top;
+    const bottom= top+ height;
+    const right= (col+1)*width- ce.scrollLeft+ rootRect.left+ this.spacerOffset;
+
     // Cursor leaves bottom of the screen
-    if( lineRect.bottom > rootRect.bottom ) {
-      ce.scrollTop+= lineRect.bottom- rootRect.bottom;
+    if( bottom > rootRect.bottom ) {
+      ce.scrollTop+= bottom- rootRect.bottom;
 
     // Cursor leaves top of the screen
-    } else if( lineRect.top < rootRect.top ) {
-      ce.scrollTop-= rootRect.top- lineRect.top;
+    } else if( top < rootRect.top ) {
+      ce.scrollTop-= rootRect.top- top;
     }
 
     // Cursor leaves right of the screen
-    if( lineRect.right > rootRect.right ) {
-      ce.scrollLeft+= lineRect.right- rootRect.right;
+    if( right > rootRect.right ) {
+      ce.scrollLeft+= right- rootRect.right;
 
     // Cursor leaves left of the screen
-    }else if( lineRect.right < rootRect.left ) {
-      ce.scrollLeft-= rootRect.left- lineRect.right;
+    }else if( right < rootRect.left ) {
+      ce.scrollLeft-= rootRect.left- right;
     }
   }
 
@@ -2939,6 +2946,7 @@ function Egitor(){
   Editor.prototype.updateViewport= function() {
     this.viewport= this.sizeElement.getBoundingClientRect();
     this.charDimensions= this.sizeElement.firstElementChild.firstElementChild.getBoundingClientRect();
+    this.spacerOffset= this.lines[0].cursorOverlayElement.firstElementChild.getBoundingClientRect().width;
   }
 
   Editor.prototype.unfocus= function() {

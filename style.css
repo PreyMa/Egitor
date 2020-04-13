@@ -51,6 +51,7 @@
 .line-number {
   display: inline-block;
   width: 50px;
+  margin-right: 10px;
   color: grey;
   background-color: #cdeefa;
   padding-right: 10px;
@@ -82,7 +83,7 @@
 
 .overlay-spacer {
   display: inline-block;
-  width: 45px;
+  width: 55px;
   padding-right: 10px;
   text-align: right;
 }
@@ -125,7 +126,7 @@
 }
 
 .selection-overlay-spacer {
-  width: 50px;
+  width: 60px;
 }
 
 .input-container {
