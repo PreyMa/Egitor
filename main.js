@@ -259,7 +259,7 @@ function Egitor(){
   * Defines text styles
   * Features: color, bold, italic, underline
   **/
-  function Styling( name, color, bold, italic, underline ) {
+  function Styling( name, color, bold= false, italic= false, underline= false ) {
     this.name= name;
     this._id= (Styling.staticCounter++);
 
@@ -293,9 +293,10 @@ function Egitor(){
   const defStyles= {
     Text:     new Styling( 'text' ),
     Keyword:  new Styling( 'keyword',  'blue', true ),
-    String:   new Styling( 'string',   'green' ),
+    String:   new Styling( 'string',   '#5aa042' ),
     Comment:  new Styling( 'comment',  'grey', false, true ),
-    Constant: new Styling( 'constant', 'gold' )
+    Constant: new Styling( 'constant', '#efc019' ),
+    Special:  new Styling( 'magic',    '#e83be3', true)
   };
 
   /**
@@ -1749,7 +1750,13 @@ function Egitor(){
   }
 
   ActionLineSpan.prototype.forEach= function( cb ) {
+    console.log( 'ls:', this.lineNum, this.span )
     for( let i= this.lineNum; i!= this.lineNum+ this.span; i++ ) {
+      // Check if line exists in the document
+      if( i >= this.ctx.lines.length ) {
+        console.log('break foreach');
+        break;
+      }
       cb( this.ctx.lines[i] );
     }
   }
@@ -2092,7 +2099,8 @@ function Egitor(){
   }
 
   RemoveLineAction.prototype.emitEvent= function() {
-    return new ActionLineSpan( this.lineNum, this.lines );
+    // See RemoveTextAction.prototype.emitEvent
+    return new ActionLineSpan( this.lineNum, this.lines.length );
   }
 
   RemoveLineAction.prototype.attach= function( ac ) {
@@ -2180,6 +2188,8 @@ function Egitor(){
   }
 
   RemoveTextAction.prototype.emitEvent= function() {
+    // Only send an request to update the one remaining line, as the other
+    // ones now don't exist
     return new ActionLineSpan( this.lineNum, this.lines.length );
   }
 
@@ -2216,6 +2226,10 @@ function Egitor(){
     this.attachedEventTimer= null;
   }
 
+  ActionStack.prototype.doEvent= function( action, tmr= false ) {
+    this.onActionPushed ? this.onActionPushed( action, tmr ) :  0;
+  }
+
   ActionStack.prototype.moveBack= function() {
     // Reached the begin of the history
     if( !this.pos ) {
@@ -2247,7 +2261,8 @@ function Egitor(){
 
     this.arr.push( action );
     this._clearTimer();
-    this.onActionPushed ? this.onActionPushed( action, false ) :  0;
+    console.log('p:', action)
+    this.doEvent( action );
   }
 
   ActionStack.prototype.get= function() {
@@ -2259,6 +2274,7 @@ function Egitor(){
     const a= this.moveBack();
     if( a ) {
       a.undoAction();
+      this.doEvent( a );
     }
   }
 
@@ -2267,6 +2283,7 @@ function Egitor(){
     const a= this.moveForward();
     if( a ) {
       a.redoAction();
+      this.doEvent( a );
     }
   }
 
@@ -2304,8 +2321,10 @@ function Egitor(){
     // timeout to attach to it, triggering the parser if one is set
     this._clearTimer();
     this.attachedEventTimer= window.setTimeout( () => {
+      console.log('t:', action)
+
       // Call with the 'timerbased'-flag set to true
-      this.onActionPushed ? this.onActionPushed( action, true ) : 0;
+      this.doEvent( action, true );
     }, ActionBase.maxTime );
   }
 
@@ -2353,6 +2372,16 @@ function Egitor(){
     a.push( cb );
   }
 
+  EventMap.prototype.removeListener= function( nm, cb ) {
+    let a= this.map.get( nm );
+    if( a ) {
+      let idx= a.indexOf(cb);
+      if( idx >= 0 ) {
+        a.splice( idx, 1 );
+      }
+    }
+  }
+
   EventMap.prototype.call= function( num, args ) {
     this._broadcast( (num < this.table.length) ? this.table[num] : null, args );
   }
@@ -2381,9 +2410,13 @@ function Egitor(){
 
     // Call the cb either by apply or as a function with a single argument
     if( Array.isArray(args) ) {
-      a.forEach( cb => cb.apply(window, args) );
+      a.forEach( cb => {
+        try { cb.apply(window, args) } catch(e) { console.error(e); }
+      });
     } else {
-      a.forEach( cb => cb( args ) );
+      a.forEach( cb => {
+        try { cb(args) } catch(e) { console.error(e); }
+      });
     }
   }
 
@@ -2725,9 +2758,6 @@ function Egitor(){
     // Initially ocus the editor
     this._isConstruct= true;
     this.focus();
-
-    // Test the CParser
-    let l= new TextParserC( this );
   }
 
   Editor.prototype._createDOM= function( anchor ) {
@@ -2951,6 +2981,11 @@ function Egitor(){
 
   Editor.prototype.addEventListener= function( nm, cb ) {
     this.emitter.addListener( nm, cb );
+    return cb;
+  }
+
+  Editor.prototype.removeEventListener= function( nm, cb ) {
+    this.emitter.removeListener(nm, cb);
   }
 
   Editor.prototype._getTabulator= function() {
@@ -3150,9 +3185,11 @@ function Egitor(){
     this.opList= operators.sort( (a,b) => b.length- a.length );
     this.compList= compounds.sort( (a,b) => b.beginSeq.length- a.beginSeq.length );
     this.editor= e;
-    this.editor.addEventListener('lineaction', ls => {
-      this.onLineAction( ls );
-    });
+    this.handle= this.editor.addEventListener('lineaction', ls => this.onLineAction( ls ) );
+  }
+
+  TextParser.prototype.unregister= function() {
+    this.editor.removeEventListener( 'lineaction', this.handle );
   }
 
   TextParser.prototype.tagAsMultiCompound= function( line, comp ) {
@@ -3232,7 +3269,7 @@ function Egitor(){
       }
     }
 
-    cb( line, new TextToken( TokenType.Word, begin, it ) );
+    cb( line, new TextToken( TokenType.Word, begin, it, wbegin ) );
   }
 
   TextParser.prototype.loadOperator= function( it, line, cb ) {
@@ -3331,12 +3368,22 @@ function Egitor(){
                      'void', 'do', 'if', 'static', 'while', 'default', 'goto',
                      'sizeof', 'volatile', 'const', 'float', 'short', 'unsigned'];
 
+    const CT= {
+      LineComment: 0,
+      BlockComment: 1,
+      String: 2,
+      Character: 3,
+      Preprocessor: 4
+    };
+
+    this.compTypes= CT;
+
     // Define all compounds
-    this.compounds= [ new CompoundType('line-comment',  null, '//', '\n'),
-                      new CompoundType('block-comment', null, '/*', '*/'),
-                      new CompoundType('string',        '\\', '"'       ),
-                      new CompoundType('character',     '\\', '\''      ),
-                      new CompoundType('preprocessor',  null, '#',  '\n')
+    this.compounds= [ new CompoundType(CT.LineComment,  null, '//', '\n'),
+                      new CompoundType(CT.BlockComment, null, '/*', '*/'),
+                      new CompoundType(CT.String,       '\\', '"'       ),
+                      new CompoundType(CT.Character,    '\\', '\''      ),
+                      new CompoundType(CT.Preprocessor, null, '#',  '\n')
                     ];
 
     // Define all oprators
@@ -3372,7 +3419,7 @@ function Egitor(){
           break;
 
         case TokenType.Compound:
-          styler.add( l, tk, defStyles.String );
+          this.styleCompound( styler, l, tk );
           break;
       }
     });
@@ -3380,6 +3427,36 @@ function Egitor(){
     // Submit the last line manually
     styler.submit();
   }
+
+  TextParserC.prototype.styleCompound= function( styler, l, tk ) {
+    const CT= this.compTypes;
+
+    switch( tk.comp.name ) {
+      case CT.LineComment:
+      case CT.BlockComment:
+        styler.add( l, tk, defStyles.Comment );
+        break;
+
+      case CT.String:
+      case CT.Character:
+        styler.add( l, tk, defStyles.String );
+        break;
+
+      case CT.Preprocessor:
+        styler.add( l, tk, defStyles.Special );
+        break;
+
+      default:
+        styler.add( l, tk, defStyles.Text );
+        console.error('Unknown compound type', tk);
+        break;
+    }
+  }
+
+  // Create list of predefined text parser classes
+  Editor.defaultTextParser= {
+    LangC: function( e ) { return new TextParserC( e ); }
+  };
 
   return Editor;
 }
