@@ -2872,7 +2872,7 @@ function Egitor(){
     document.addEventListener('mousedown', e => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
 
     let selTimer= null;
-    document.addEventListener('mousemove', debounce( e => {
+    window.addEventListener('mousemove', debounce( e => {
       // Check if mouse position has actually changed
       if( !this.mousePagePos.isEqual( e.pageX, e.pageY ) ) {
         this.mousePos.set( e.clientX, e.clientY );
@@ -2922,6 +2922,14 @@ function Egitor(){
         }
       }
     }) );
+
+    window.addEventListener('mouseup', () => {
+      // Immediately stop the selection timer if the mouse was released
+      if( selTimer ) {
+        window.clearTimeout( selTimer );
+        selTimer= null;
+      }
+    });
 
     // Set scroll position for all stacked overlays
     // Only run every frame and ignore any other incoming events
