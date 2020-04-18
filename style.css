@@ -38,6 +38,9 @@
 
 .overlay-content {
   display: inline-block;
+  min-width: -webkit-fill-available;
+  min-width: -moz-available;
+  min-width: available;
 }
 
 .line {

@@ -324,12 +324,15 @@ function Egitor(){
   }
 
   StyleEntry.prototype.splitSection= function( section, pos ) {
+    // Position where to split inside the section
     const o= pos- this.start;
     const inner= section.innerText;
 
+    // Create new element and set its content
     const elem= this.type.createElement();
     elem.innerText= inner.substring( o );
 
+    // Update the end position and the original elements content
     this.end= o;
     this.writeText( section, inner );
 
@@ -846,11 +849,19 @@ function Egitor(){
 
   Cursor.prototype._removeSelection= function( selection ) {
     // Iterate over all selected lines
+    let oldLength= 0, newLength= 0;
     let first= null, begin;
     let num= selection.forEach( (l, b, e, i) => {
+      // Store the length of the longest removed/shortened line
+      const longest= oldLength < l.text.length;
+      if( longest ) {
+        oldLength= l.text.length;
+      }
+
       // Neither the first or last line
       if( b< 0 ) {
         l.destroy( false );
+        newLength= longest ? 0 : newLength; // Store new length
         return Selection.NoIncrement;
       }
 
@@ -861,13 +872,19 @@ function Egitor(){
       }
 
       // First or last line
-      l.removeTextSection( b, e );
+      l.removeTextSection( b, e, false );
+      newLength= longest ? l.text.length : newLength; // Store new length
     });
 
     // Remove line break
     if( num > 1 ) {
       first.removeCharacter( first.text.length );
     }
+
+    // Update the change of the longest removed/shortened line 'L' in the selection
+    // after removing the NL. This might create a new longest line what therefore
+    // removes the need to search after a new one if L was shorter than the new one
+    currentContext._updateLineLength( oldLength, newLength );
 
     selection.destroy();
     this._move( first.number, begin );
@@ -1049,7 +1066,7 @@ function Egitor(){
   Cursor.prototype._insertText= function( lines ) {
     const lastLine= lines[lines.length-1];
 
-    let line= null;
+    let line= null; // Last modified line object to set the cursor to
 
     // One line selections are removed imediately and get treated as insertions
     // without a selection at all
@@ -1059,38 +1076,53 @@ function Egitor(){
 
     // Multiline selection
     if( this.selection ) {
+      // Save the length of the longest line changed and of the new longest line
+      let maxOldLen= 0, maxNewLen= 0;
+      function lengthDiff( o, n ) {
+        maxOldLen= Math.max( maxOldLen, o );
+        maxNewLen= Math.max( maxNewLen, n );
+      }
 
       this.selection.forEach((l, b, e, i) => {
+        // Get the old length of the current line
+        const len= l.text.length;
+
         // Neither first or last line
         if( b < 0 ) {
           // Replace the line data
           if( i < lines.length-1 ) {
-            l.reset( lines[i] );
+            l.reset( lines[i], false );
+            lengthDiff( len, lines[i].length );
             return;
           }
 
           // Remove any remaining lines of the selection
           l.destroy( false ); // Don't update line numbers yet
+          lengthDiff( len, 0 );
           return Selection.NoIncrement;
         }
 
-        // First line of the selection
         if( !i ) {
-          l.removeTextSection( b, e );
-          l.append( lines[i] );
-          return;
+          // First line of the selection
+          l.removeTextSection( b, e, false );
+          l.append( lines[i], false );
+
+        } else {
+          // Last line of the selection
+          l.removeTextSection( b, e, false );
+          l.writeCharacter( 0, lastLine, false );
+          line= l;
         }
 
-        // Last line of the selection
-        l.removeTextSection( b, e );
-        l.writeCharacter( 0, lastLine );
-        line= l;
+        lengthDiff( len, l.text.length );
       });
 
       // Insert any lines that didn't fit in the selection
       for( let i= this.selection.lineSpan(); i< lines.length-1; i++ ) {
         new Line( this.curLine.number+ i, lines[i], false );
       }
+
+      currentContext._updateLineLength( maxOldLen, maxNewLen );
 
       this.unselect()
 
@@ -1233,7 +1265,8 @@ function Egitor(){
 
     // Insert text
     if( content !== null ) {
-      this.append( content );
+      // Update the line length after the line was attached to the DOM
+      this.append( content, false );
     } else {
       // Add default styling
       this.addDefaultStyling();
@@ -1241,6 +1274,7 @@ function Egitor(){
 
     // Attach the line to the DOM and the lines-array
     this.attachLineToDOM();
+    currentContext._updateLineLength(0, this.text.length);
 
     // Update all following lines
     if( updateLines ) {
@@ -1272,9 +1306,15 @@ function Egitor(){
     }
   }
 
-  Line.prototype.reset= function( txt= null ) {
+  Line.prototype.reset= function( txt= null, upd= true ) {
+    const oldLength= this.text.length;
+
     this.text= (txt !== null) ? txt : '';
     this.addDefaultStyling();
+
+    if( upd ) {
+      currentContext._updateLineLength( oldLength, this.text.length );
+    }
   }
 
   Line.prototype.isLastLine= function() {
@@ -1384,15 +1424,16 @@ function Egitor(){
     return new LineData( this.text, s, e );
   }
 
-  Line.prototype.split= function( pos ) {
+  Line.prototype.split= function( pos, upd= true ) {
     // Return no split if position is at the end of the line
     if( pos === this.text.length ) {
       return null;
     }
 
     // Split the text string
-    let data= new LineData();
-    let text= this.text;
+    const data= new LineData();
+    const text= this.text;
+    const oldLength= text.length;
     this.text= text.substring( 0, pos );
     data.text= text.substring( pos, text.length );
 
@@ -1432,7 +1473,13 @@ function Egitor(){
     }
 
     if( !this.styling.length ) {
+      // If no sections are left
       this.addDefaultStyling();
+    }
+
+    if( upd ) {
+      // Update that the length has changed
+      currentContext._updateLineLength( oldLength, this.text.length );
     }
 
     return data;
@@ -1474,13 +1521,15 @@ function Egitor(){
     }
   }
 
-  Line.prototype.append= function( data ) {
+  Line.prototype.append= function( data, upd= true ) {
+    const oldLength= this.text.length;
+
     // Data may also be a simple string
     if( typeof data === 'string' ) {
       if( !this.styling.length ) {
         this.addDefaultStyling();
       }
-      this.writeCharacter( this.text.length, data );
+      this.writeCharacter( this.text.length, data, upd );
       return;
     }
 
@@ -1500,6 +1549,10 @@ function Egitor(){
     this.text+= data.text;
 
     this.mergeElements();
+
+    if( upd ) {
+      currentContext._updateLineLength( oldLength, this.text.length );
+    }
   }
 
   Line.prototype.updateSectionPositions= function( idx, offset ) {
@@ -1509,7 +1562,8 @@ function Egitor(){
     }
   }
 
-  Line.prototype.writeCharacter= function( pos, c ) {
+  Line.prototype.writeCharacter= function( pos, c, upd= true ) {
+    const oldLength= this.text.length;
   	const t= insert( this.text, c, pos );
     this.text= t;
 
@@ -1523,6 +1577,9 @@ function Egitor(){
     this.updateSectionPositions( idx+1, c.length );
 
     style.writeText( elem, t );
+    if( upd ) {
+      currentContext._updateLineLength( oldLength, this.text.length );
+    }
   }
 
   Line.prototype.removeSectionByIndex= function( idx, update= true ) {
@@ -1544,7 +1601,7 @@ function Egitor(){
     return false;
   }
 
-  Line.prototype.removeTextSection= function( pos, end ) {
+  Line.prototype.removeTextSection= function( pos, end, upd= true ) {
     if( typeof end === 'undefined') {
       end= this.text.length;
     }
@@ -1560,6 +1617,7 @@ function Egitor(){
     end= clamp( end, 0, this.text.length );
 
     // Update text string
+    const oldLength= this.text.length;
     let t= extract( this.text, pos, end );
     this.text= t;
 
@@ -1610,11 +1668,14 @@ function Egitor(){
       this.updateSectionPositions( idx, -offset );
     }
     this.mergeElements();
+
+    if( upd ) {
+      // Update that the length of the line has changed
+      currentContext._updateLineLength( oldLength, this.text.length );
+    }
   }
 
   Line.prototype.removeCharacter= function( pos ) {
-    const lines= currentContext.lines;
-
     // Remove NL of previous line
     if( pos < 0 ) {
       // If not the first line
@@ -1623,6 +1684,8 @@ function Egitor(){
         let len= prev.text.length;
 
         // Append the text of this line to the previous one
+        // Destroy may call _updateLineLength again, as it is guaranteed that
+        // after append a now longer line exists
         prev.append( this.getData() );
         this.destroy();
 
@@ -1674,6 +1737,7 @@ function Egitor(){
 
     // Update all following lines
     if( upd ) {
+      currentContext._updateLineLength( this.text.length, 0 );
       this.updateLineNumbers();
     }
   }
@@ -2600,6 +2664,7 @@ function Egitor(){
   **/
   function Editor( anchor ) {
     this.tabLength= 2;
+    this.maxLineLength= 0;
     this.mousePos= new Vector();
     this.mousePagePos= new Vector();
 
@@ -2759,7 +2824,6 @@ function Egitor(){
         }
       }
       this.anim.type();     // Pause the cursor blinking animation while typing
-      this._updateWidths(); // Make all overlays as big as the text layer
 
       emitter.execDefered();// Execute ayn defered events
     });
@@ -2963,6 +3027,22 @@ function Egitor(){
   Editor.prototype._mouseInViewportY= function() {
     const vp= this.viewport;
     return isInRange( this.mousePos.y, vp.top, vp.bottom );
+  }
+
+  Editor.prototype._updateLineLength= function( oldLen, newLen ) {
+    if( this.maxLineLength < newLen ) {
+      // New longest line is set
+      this.maxLineLength= newLen;
+      this._updateWidths();
+    } else {
+      if( (oldLen > newLen) && (oldLen >= this.maxLineLength) ) {
+        // Previously longest line has shrunk
+        // Find the currently longest line
+        this.maxLineLength= 0;
+        this.lines.forEach( l => this.maxLineLength= Math.max(this.maxLineLength, l.text.length) );
+        this._updateWidths();
+      }
+    }
   }
 
   Editor.prototype.updateViewport= function() {
