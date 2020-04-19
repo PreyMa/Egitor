@@ -2870,7 +2870,18 @@ function Egitor(){
     let isMouseOver= false;
     this.anchor.addEventListener('mouseover', () => { isMouseOver= true;  });
     this.anchor.addEventListener('mouseout',  () => { isMouseOver= false; });
-    document.addEventListener('mousedown', e => { isMouseOver ? (this.focus() ? this._setCoursorByClick(e) : 0 ) : this.unfocus(); e.preventDefault(); });
+
+    window.addEventListener('mousedown', e => {
+      if( isMouseOver ) {
+        if(this.focus() && this._mouseInViewportXY()) {
+          this._setCoursorByClick( e );
+        }
+      } else {
+        this.unfocus();
+      }
+
+      e.preventDefault();
+    });
 
     let selTimer= null;
     window.addEventListener('mousemove', debounce( e => {
@@ -3036,6 +3047,12 @@ function Egitor(){
   Editor.prototype._mouseInViewportY= function() {
     const vp= this.viewport;
     return isInRange( this.mousePos.y, vp.top, vp.bottom );
+  }
+
+  Editor.prototype._mouseInViewportXY= function() {
+    const vp= this.viewport;
+    return isInRange( this.mousePos.y, vp.top, vp.bottom ) &&
+           isInRange( this.mousePos.x, vp.left, vp.right );
   }
 
   Editor.prototype._updateLineLength= function( oldLen, newLen ) {
