@@ -2041,7 +2041,8 @@ function Egitor(){
   }
 
   AddLineAction.prototype.emitEvent= function() {
-    return new ActionLineSpan( this.lineNum, this.lines );
+    // Also update the line created by splitting the first one
+    return new ActionLineSpan( this.lineNum, this.lines+1 );
   }
 
   AddLineAction.prototype.attach= function( ac ) {
